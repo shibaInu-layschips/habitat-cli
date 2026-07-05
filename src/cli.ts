@@ -52,6 +52,7 @@ import {
   updateZone,
   type Zone,
 } from "./zones";
+import { readData } from "./store";
 import {
   createWaterRecycler,
   getWaterRecycler,
@@ -136,6 +137,46 @@ function printPowerSystem(powerSystem: PowerSystem) {
   console.log(`Status: ${powerSystem.status}`);
 }
 
+function printHabitatStatus(data: Awaited<ReturnType<typeof readData>>) {
+  console.log("Habitat Status");
+  console.log(`Zones: ${data.zones.length}`);
+  console.log(`Alerts: ${data.alerts.length}`);
+  console.log(`Rovers: ${data.rovers.length}`);
+  console.log(`Doors: ${data.doors.length}`);
+  console.log(`Airlocks: ${data.airlocks.length}`);
+  console.log(
+    `Battery: ${data.battery ? `${data.battery.percentageEnergy}% energy, damage ${data.battery.damage}` : "Not created"}`,
+  );
+  console.log(
+    `Power System: ${data.powerSystem ? `${data.powerSystem.status}, damage ${data.powerSystem.damage}` : "Not created"}`,
+  );
+  console.log(
+    `Water Recycler: ${data.waterRecycler ? `${data.waterRecycler.waterLevel} water, filter ${data.waterRecycler.filterStatus}` : "Not created"}`,
+  );
+
+  if (data.zones.length > 0) {
+    console.log(`Zone Names: ${data.zones.map((zone) => zone.name).join(", ")}`);
+  }
+
+  if (data.alerts.length > 0) {
+    console.log(
+      `Alert Names: ${data.alerts.map((alert) => `${alert.name} (${alert.status})`).join(", ")}`,
+    );
+  }
+
+  if (data.rovers.length > 0) {
+    console.log(
+      `Rover Names: ${data.rovers.map((rover) => `${rover.name} (${rover.status})`).join(", ")}`,
+    );
+  }
+
+  if (data.airlocks.length > 0) {
+    console.log(
+      `Airlock Names: ${data.airlocks.map((airlock) => `${airlock.name} (${airlock.doorNames.length} doors)`).join(", ")}`,
+    );
+  }
+}
+
 export async function runHabitat(argv: string[]) {
   const program = new Command();
 
@@ -165,6 +206,7 @@ Persistence:
     .habitat/data.json
 
 Command groups:
+  status     Summarize the current habitat
   zone       Create, list, show, update, and delete zones
   alert      Create, list, show, update, delete, and send alerts
   battery    Show and operate the battery
@@ -181,6 +223,7 @@ Command groups:
     `
 Quick start:
   habitat --help
+  habitat status
   habitat zone --help
   habitat alert --help
   habitat battery --help
@@ -199,6 +242,7 @@ Quick start:
   water --help
 
 Useful inspection commands:
+  habitat status
   cat .habitat/data.json
   habitat zone list
   habitat alert list
@@ -214,6 +258,14 @@ Useful inspection commands:
   program.configureOutput({
     outputError: (str, write) => write(str),
   });
+
+  program
+    .command("status")
+    .description("Summarize the current habitat.")
+    .action(async () => {
+      const data = await readData();
+      printHabitatStatus(data);
+    });
 
   const zoneCommand = program.command("zone").description("Manage zones.");
   const alertCommand = program.command("alert").description("Manage alerts.");
