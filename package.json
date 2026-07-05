@@ -1,0 +1,27 @@
+{
+  "name": "habitat",
+  "version": "0.1.0",
+  "description": "A Bun and TypeScript command-line app named habitat.",
+  "type": "module",
+  "bin": {
+    "habitat": "./src/index.ts",
+    "zone": "./src/zone.ts",
+    "alert": "./src/alert.ts",
+    "battery": "./src/battery-entry.ts",
+    "rover": "./src/rover.ts",
+    "door": "./src/door.ts",
+    "airlock": "./src/airlock.ts",
+    "power-system": "./src/power-system-entry.ts",
+    "water": "./src/water-entry.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.20",
+    "typescript": "^5.9.2"
+  }
+}
