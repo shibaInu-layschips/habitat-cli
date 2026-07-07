@@ -19,6 +19,7 @@ type KeplerConfig = {
 };
 
 const registrationFilePath = join(process.cwd(), ".habitat", "registration.json");
+const habitatIdentityFilePath = join(process.cwd(), ".habitat", "identity.json");
 
 function getConfig(): KeplerConfig {
   const baseUrl = process.env.KEPLER_BASE_URL?.trim();
@@ -82,6 +83,27 @@ function buildFallbackUnregisterUrls(baseUrl: string, registration: KeplerRegist
 
 async function ensureRegistrationDir() {
   await mkdir(dirname(registrationFilePath), { recursive: true });
+}
+
+async function readOrCreateHabitatUuid() {
+  await ensureRegistrationDir();
+
+  if (existsSync(habitatIdentityFilePath)) {
+    const raw = await readFile(habitatIdentityFilePath, "utf8");
+    const parsed = JSON.parse(raw) as { habitatUuid?: unknown };
+
+    if (typeof parsed.habitatUuid === "string" && parsed.habitatUuid.length > 0) {
+      return parsed.habitatUuid;
+    }
+  }
+
+  const habitatUuid = crypto.randomUUID();
+  await writeFile(
+    habitatIdentityFilePath,
+    `${JSON.stringify({ habitatUuid }, null, 2)}\n`,
+    "utf8",
+  );
+  return habitatUuid;
 }
 
 async function writeRegistration(registration: KeplerRegistration) {
@@ -197,6 +219,7 @@ export async function registerHabitat(name: string) {
 
   const { baseUrl, planetToken } = getConfig();
   const registerUrl = buildRegisterUrl(baseUrl);
+  const habitatUuid = await readOrCreateHabitatUuid();
 
   let response: Response;
   try {
@@ -207,7 +230,7 @@ export async function registerHabitat(name: string) {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ displayName: name, habitatUuid }),
     });
   } catch (error) {
     throw new Error(`Unable to reach Kepler at ${registerUrl}: ${getErrorMessage(error)}`);
