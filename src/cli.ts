@@ -14,6 +14,15 @@ import {
   runPowerTicks,
 } from "./power-simulation";
 import { formatModuleStatusReport } from "./module-status";
+import { formatBlueprintList } from "./blueprint-report";
+import { formatResourceList } from "./resource-report";
+import {
+  KeplerBlueprintNotFoundError,
+  listBlueprintCatalog,
+  showBlueprintCatalogEntry,
+  type KeplerBlueprint,
+} from "./kepler-blueprints";
+import { listResourceCatalog } from "./kepler-resources";
 import {
   ensureLocalModulesFromRegistration,
   readRegistration,
@@ -53,6 +62,27 @@ function printBatteryModule(module: HabitatModule) {
   console.log(`Storage Capacity: ${formatNumber(storageEnergy)} kWh`);
   console.log(`Reserve: ${formatNumber(reserveEnergy)} kWh`);
   console.log(`Max Power Output: ${formatNumber(maxPowerOutput)} kW`);
+}
+
+function printBlueprint(blueprint: KeplerBlueprint) {
+  console.log(`Blueprint ID: ${blueprint.blueprintId}`);
+  console.log(`Catalog ID: ${blueprint.id}`);
+  console.log(`Display Name: ${blueprint.displayName}`);
+  console.log(`Status: ${blueprint.status || "unknown"}`);
+  console.log(`Build Ticks: ${blueprint.buildTicks}`);
+  console.log(`Description: ${blueprint.description || "None"}`);
+  console.log(
+    `Prerequisites: ${blueprint.prerequisites.length > 0 ? blueprint.prerequisites.join(", ") : "None"}`,
+  );
+  console.log(
+    `Capabilities: ${blueprint.capabilities.length > 0 ? blueprint.capabilities.join(", ") : "None"}`,
+  );
+  console.log(
+    `Inputs: ${Object.keys(blueprint.inputs).length > 0 ? JSON.stringify(blueprint.inputs) : "{}"}`,
+  );
+  console.log(
+    `Output: ${Object.keys(blueprint.output).length > 0 ? JSON.stringify(blueprint.output) : "{}"}`,
+  );
 }
 
 async function printHabitatStatus(registration: KeplerRegistration | null) {
@@ -95,6 +125,8 @@ Habitat CLI for this lab:
   status      Show habitat status
   unregister  Remove this habitat registration from Kepler
   tick        Advance the habitat simulation and drain battery power
+  blueprint   Read the Kepler blueprint catalog
+  resource    Read the Kepler resource catalog
   module      Create, inspect, update, and delete local habitat modules
   battery     Show battery status
 
@@ -113,6 +145,9 @@ Quick start:
   habitat --help
   habitat register --name "Apollo 2.0"
   habitat status
+  habitat blueprint list
+  habitat blueprint show basic-battery
+  habitat resource list
   habitat tick 10
   habitat module list
   habitat battery status
@@ -208,9 +243,79 @@ Required environment variables:
     .command("module")
     .description("Manage local habitat module records.");
 
+  const blueprintCommand = program
+    .command("blueprint")
+    .description("Read the official Kepler blueprint catalog.");
+
+  const resourceCommand = program
+    .command("resource")
+    .description("Read the official Kepler resource catalog.");
+
   const batteryCommand = program
     .command("battery")
     .description("Inspect the habitat battery.");
+
+  blueprintCommand
+    .command("list")
+    .description("List official Kepler blueprint catalog entries.")
+    .action(async () => {
+      try {
+        const blueprints = await listBlueprintCatalog();
+
+        if (blueprints.length === 0) {
+          console.log("No Kepler blueprint catalog entries were returned.");
+          return;
+        }
+
+        console.log("Kepler Blueprint Catalog");
+        console.log(formatBlueprintList(blueprints));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to list Kepler blueprints.";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  blueprintCommand
+    .command("show")
+    .description("Show one official Kepler blueprint catalog entry.")
+    .argument("<blueprint-id>", "blueprint ID")
+    .action(async (blueprintId) => {
+      try {
+        const blueprint = await showBlueprintCatalogEntry(blueprintId);
+        printBlueprint(blueprint);
+      } catch (error) {
+        const message =
+          error instanceof KeplerBlueprintNotFoundError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : "Unable to show Kepler blueprint.";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  resourceCommand
+    .command("list")
+    .description("List official Kepler resource catalog entries.")
+    .action(async () => {
+      try {
+        const resources = await listResourceCatalog();
+
+        if (resources.length === 0) {
+          console.log("No Kepler resource catalog entries were returned.");
+          return;
+        }
+
+        console.log("Kepler Resource Catalog");
+        console.log(formatResourceList(resources));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to list Kepler resources.";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
 
   batteryCommand
     .command("status")
