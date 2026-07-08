@@ -19,9 +19,17 @@ type KeplerConfig = {
   planetToken: string;
 };
 
-const registrationFilePath = join(process.cwd(), ".habitat", "registration.json");
-const habitatIdentityFilePath = join(process.cwd(), ".habitat", "identity.json");
-const habitatIdentityBackupFilePath = join(process.cwd(), ".habitat", "identity.previous.json");
+function getRegistrationFilePathValue() {
+  return join(process.cwd(), ".habitat", "registration.json");
+}
+
+function getHabitatIdentityFilePathValue() {
+  return join(process.cwd(), ".habitat", "identity.json");
+}
+
+function getHabitatIdentityBackupFilePathValue() {
+  return join(process.cwd(), ".habitat", "identity.previous.json");
+}
 
 class KeplerRequestError extends Error {
   status: number;
@@ -102,29 +110,31 @@ function buildFallbackUnregisterUrls(baseUrl: string, registration: KeplerRegist
 }
 
 async function ensureRegistrationDir() {
-  await mkdir(dirname(registrationFilePath), { recursive: true });
+  await mkdir(dirname(getRegistrationFilePathValue()), { recursive: true });
 }
 
 async function writeHabitatUuid(habitatUuid: string) {
   await ensureRegistrationDir();
   await writeFile(
-    habitatIdentityFilePath,
+    getHabitatIdentityFilePathValue(),
     `${JSON.stringify({ habitatUuid }, null, 2)}\n`,
     "utf8",
   );
 }
 
 async function backupHabitatIdentity() {
+  const habitatIdentityFilePath = getHabitatIdentityFilePathValue();
   if (!existsSync(habitatIdentityFilePath)) {
     return;
   }
 
   const raw = await readFile(habitatIdentityFilePath, "utf8");
-  await writeFile(habitatIdentityBackupFilePath, raw, "utf8");
+  await writeFile(getHabitatIdentityBackupFilePathValue(), raw, "utf8");
 }
 
 async function readOrCreateHabitatUuid() {
   await ensureRegistrationDir();
+  const habitatIdentityFilePath = getHabitatIdentityFilePathValue();
 
   if (existsSync(habitatIdentityFilePath)) {
     const raw = await readFile(habitatIdentityFilePath, "utf8");
@@ -149,7 +159,7 @@ async function replaceHabitatUuid() {
 
 async function writeRegistration(registration: KeplerRegistration) {
   await ensureRegistrationDir();
-  await writeFile(registrationFilePath, `${JSON.stringify(registration, null, 2)}\n`, "utf8");
+  await writeFile(getRegistrationFilePathValue(), `${JSON.stringify(registration, null, 2)}\n`, "utf8");
 }
 
 export async function ensureLocalModulesFromRegistration(registration: KeplerRegistration | null) {
@@ -174,6 +184,7 @@ export async function ensureLocalModulesFromRegistration(registration: KeplerReg
 }
 
 export async function readRegistration(): Promise<KeplerRegistration | null> {
+  const registrationFilePath = getRegistrationFilePathValue();
   if (!existsSync(registrationFilePath)) {
     return null;
   }
@@ -203,6 +214,7 @@ export async function readRegistration(): Promise<KeplerRegistration | null> {
 }
 
 async function clearRegistration() {
+  const registrationFilePath = getRegistrationFilePathValue();
   if (existsSync(registrationFilePath)) {
     await rm(registrationFilePath, { force: true });
   }
@@ -416,5 +428,5 @@ export async function unregisterHabitat() {
 }
 
 export function getRegistrationFilePath() {
-  return registrationFilePath;
+  return getRegistrationFilePathValue();
 }

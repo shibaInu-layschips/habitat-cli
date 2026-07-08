@@ -8,6 +8,13 @@ import {
   updateModule,
 } from "./module-storage";
 import {
+  findBatteryModule,
+  getModulePowerDrawKw,
+  readSimulationState,
+  runPowerTicks,
+} from "./power-simulation";
+import { formatModuleStatusReport } from "./module-status";
+import {
   ensureLocalModulesFromRegistration,
   readRegistration,
   registerHabitat,
@@ -15,6 +22,8 @@ import {
   type KeplerRegistration,
 } from "./kepler-registration";
 import type { HabitatModule } from "./types";
+
+const allowedModuleStatuses = ["offline", "idle", "online", "active", "damaged"] as const;
 
 function printModule(module: HabitatModule) {
   console.log(`Module: ${module.slug}`);
@@ -27,11 +36,34 @@ function printModule(module: HabitatModule) {
   console.log(`Connected To: ${module.connectedTo.length > 0 ? module.connectedTo.join(", ") : "None"}`);
 }
 
-async function printRegistrationStatus(registration: KeplerRegistration | null) {
-  console.log("Habitat Registration Status");
+function formatNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function printBatteryModule(module: HabitatModule) {
+  printModule(module);
+
+  const runtimeAttributes = module.runtimeAttributes as Record<string, unknown>;
+  const currentEnergy = typeof runtimeAttributes.currentEnergyKwh === "number" ? runtimeAttributes.currentEnergyKwh : 0;
+  const storageEnergy = typeof runtimeAttributes.energyStorageKwh === "number" ? runtimeAttributes.energyStorageKwh : 0;
+  const reserveEnergy = typeof runtimeAttributes.reserveKwh === "number" ? runtimeAttributes.reserveKwh : 0;
+  const maxPowerOutput = typeof runtimeAttributes.maxPowerOutputKw === "number" ? runtimeAttributes.maxPowerOutputKw : 0;
+
+  console.log(`Current Energy: ${formatNumber(currentEnergy)} kWh`);
+  console.log(`Storage Capacity: ${formatNumber(storageEnergy)} kWh`);
+  console.log(`Reserve: ${formatNumber(reserveEnergy)} kWh`);
+  console.log(`Max Power Output: ${formatNumber(maxPowerOutput)} kW`);
+}
+
+async function printHabitatStatus(registration: KeplerRegistration | null) {
+  const simulationState = await readSimulationState();
+  const existingModuleCount = await countModules();
+  console.log("Habitat Status");
+  console.log(`Current Tick: ${simulationState.currentTick}`);
 
   if (!registration) {
     console.log("Registration: Not registered");
+    console.log(`Modules: ${existingModuleCount}`);
     return;
   }
 
@@ -51,7 +83,7 @@ export async function runHabitat(argv: string[]) {
 
   program
     .name("habitat")
-    .description("Register this habitat with Kepler and inspect registration status.")
+    .description("Register this habitat with Kepler and inspect habitat status.")
     .version("0.1.0")
     .showHelpAfterError();
 
@@ -60,9 +92,11 @@ export async function runHabitat(argv: string[]) {
     `
 Habitat CLI for this lab:
   register    Register this habitat with Kepler
-  status      Show Kepler registration status
+  status      Show habitat status
   unregister  Remove this habitat registration from Kepler
+  tick        Advance the habitat simulation and drain battery power
   module      Create, inspect, update, and delete local habitat modules
+  battery     Show battery status
 
 Persistence:
   Registration is stored locally in:
@@ -79,7 +113,9 @@ Quick start:
   habitat --help
   habitat register --name "Apollo 2.0"
   habitat status
+  habitat tick 10
   habitat module list
+  habitat battery status
   habitat unregister
 
 Required environment variables:
@@ -100,7 +136,7 @@ Required environment variables:
       try {
         const registration = await registerHabitat(options.name);
         console.log(`Registered habitat "${registration.habitatName}" with Kepler.`);
-        await printRegistrationStatus(registration);
+        await printHabitatStatus(registration);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unable to register habitat.";
@@ -111,10 +147,40 @@ Required environment variables:
 
   program
     .command("status")
-    .description("Show Kepler registration status.")
+    .description("Show habitat status.")
     .action(async () => {
       const registration = await readRegistration();
-      await printRegistrationStatus(registration);
+      await printHabitatStatus(registration);
+    });
+
+  program
+    .command("tick")
+    .description("Advance the habitat simulation by a number of ticks.")
+    .argument("<ticks>", "number of ticks to run")
+    .action(async (ticksArg) => {
+      const ticks = Number(ticksArg);
+
+      if (!Number.isInteger(ticks) || ticks < 1) {
+        console.error("Tick count must be a positive integer.");
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const summary = await runPowerTicks(ticks);
+        const batteryCapacity = summary.batteryModule.runtimeAttributes as Record<string, unknown>;
+        const storageEnergy =
+          typeof batteryCapacity.energyStorageKwh === "number" ? batteryCapacity.energyStorageKwh : 0;
+        console.log(`Advanced ${summary.ticksApplied} ticks.`);
+        console.log(`Tick Range: ${summary.startTick} -> ${summary.endTick}`);
+        console.log(`Total Power Draw: ${formatNumber(summary.totalPowerDrawKw)} kW`);
+        console.log(`Battery Drain: ${formatNumber(summary.batteryDrainedKwh)} kWh`);
+        console.log(`Battery Remaining: ${formatNumber(summary.batteryEnergyAfterKwh)} kWh / ${formatNumber(storageEnergy)} kWh`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to advance habitat ticks.";
+        console.error(message);
+        process.exitCode = 1;
+      }
     });
 
   program
@@ -141,6 +207,29 @@ Required environment variables:
   const moduleCommand = program
     .command("module")
     .description("Manage local habitat module records.");
+
+  const batteryCommand = program
+    .command("battery")
+    .description("Inspect the habitat battery.");
+
+  batteryCommand
+    .command("status")
+    .description("Show battery status.")
+    .action(async () => {
+      const registration = await readRegistration();
+      await ensureLocalModulesFromRegistration(registration);
+      const modules = await listModules();
+      const batteryModule = findBatteryModule(modules);
+
+      if (!batteryModule) {
+        console.error('No battery module was found. Register the habitat first, then run "habitat battery status".');
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log("Battery Status");
+      printBatteryModule(batteryModule);
+    });
 
   moduleCommand
     .command("create")
@@ -188,6 +277,47 @@ Required environment variables:
       for (const module of modules) {
         console.log(`${module.slug} | ${module.displayName} | ${String(module.runtimeAttributes.status ?? "unknown")} | condition=${String(module.runtimeAttributes.condition ?? "unknown")}`);
       }
+    });
+
+  moduleCommand
+    .command("status")
+    .description("Show local habitat module status and power draw.")
+    .action(async () => {
+      const registration = await readRegistration();
+      await ensureLocalModulesFromRegistration(registration);
+      const modules = await listModules();
+
+      if (modules.length === 0) {
+        console.log("No local habitat modules found.");
+        return;
+      }
+
+      console.log("Module Status");
+      console.log(formatModuleStatusReport(modules));
+    });
+
+  moduleCommand
+    .command("set-status")
+    .description("Change one local module runtime status.")
+    .argument("<module-id>", "module ID or short name")
+    .argument("<status>", "new runtime status")
+    .action(async (id, status) => {
+      if (!allowedModuleStatuses.includes(status)) {
+        console.error(`Status must be one of: ${allowedModuleStatuses.join(", ")}.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const updatedModule = await updateModule(id, { status });
+
+      if (!updatedModule) {
+        console.error(`No module with ID or short name "${id}" was found.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`Set module "${updatedModule.slug}" status to ${status}.`);
+      console.log(`Current Power Draw: ${formatNumber(getModulePowerDrawKw(updatedModule))} kW`);
     });
 
   moduleCommand
