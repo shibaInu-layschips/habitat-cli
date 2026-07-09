@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { HabitatModule, HabitatModuleState } from "./types";
+
+const MODULES_STATE_NAMESPACE = "modules";
 
 function defaultModuleState(): HabitatModuleState {
   return {
@@ -72,64 +72,69 @@ function applyMissingSlugs(modules: HabitatModule[]) {
   });
 }
 
-async function ensureModulesDir() {
-  await mkdir(dirname(getModulesFilePath()), { recursive: true });
-}
+function readModuleStateBlob(): HabitatModuleState {
+  const raw = readStateBlob(MODULES_STATE_NAMESPACE);
 
-export function getModulesFilePath() {
-  return join(process.cwd(), ".habitat", "modules.json");
-}
-
-export async function readModuleState(): Promise<HabitatModuleState> {
-  const modulesFilePath = getModulesFilePath();
-
-  if (!existsSync(modulesFilePath)) {
+  if (!raw) {
     return defaultModuleState();
   }
 
-  const raw = await readFile(modulesFilePath, "utf8");
-  const parsed = JSON.parse(raw) as { habitatId?: unknown; modules?: unknown };
-  const habitatId = typeof parsed.habitatId === "string" ? parsed.habitatId : null;
-  const modules = Array.isArray(parsed.modules)
-    ? parsed.modules.map(parseModule).filter((module): module is HabitatModule => module !== null)
-    : [];
+  try {
+    const parsed = JSON.parse(raw) as { habitatId?: unknown; modules?: unknown };
+    const habitatId = typeof parsed.habitatId === "string" ? parsed.habitatId : null;
+    const modules = Array.isArray(parsed.modules)
+      ? parsed.modules.map(parseModule).filter((module): module is HabitatModule => module !== null)
+      : [];
 
-  return {
-    habitatId,
-    modules: applyMissingSlugs(modules),
-  };
+    return {
+      habitatId,
+      modules: applyMissingSlugs(modules),
+    };
+  } catch {
+    return defaultModuleState();
+  }
+}
+
+function writeModuleStateBlob(state: HabitatModuleState) {
+  writeStateBlob(MODULES_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+export function getModulesFilePath() {
+  return getSqliteDatabaseFilePath();
+}
+
+export async function readModuleState(): Promise<HabitatModuleState> {
+  return readModuleStateBlob();
 }
 
 export async function writeModuleState(state: HabitatModuleState) {
-  const modulesFilePath = getModulesFilePath();
-  await ensureModulesDir();
-  await writeFile(modulesFilePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  writeModuleStateBlob(state);
 }
 
 export async function hydrateModules(habitatId: string | null, modules: HabitatModule[]) {
-  await writeModuleState({
+  writeModuleStateBlob({
     habitatId,
     modules,
   });
 }
 
 export async function listModules() {
-  const state = await readModuleState();
+  const state = readModuleStateBlob();
   return state.modules;
 }
 
 export async function countModules() {
-  const state = await readModuleState();
+  const state = readModuleStateBlob();
   return state.modules.length;
 }
 
 export async function getModule(moduleId: string) {
-  const state = await readModuleState();
+  const state = readModuleStateBlob();
   return state.modules.find((module) => module.id === moduleId || module.slug === moduleId) ?? null;
 }
 
 export async function createModule(module: HabitatModule) {
-  const state = await readModuleState();
+  const state = readModuleStateBlob();
   const normalizedModule = {
     ...module,
     slug: module.slug || module.id,
@@ -145,7 +150,7 @@ export async function createModule(module: HabitatModule) {
   }
 
   state.modules.push(normalizedModule);
-  await writeModuleState(state);
+  writeModuleStateBlob(state);
   return normalizedModule;
 }
 
@@ -153,7 +158,7 @@ export async function updateModule(
   moduleId: string,
   updates: Partial<Pick<HabitatModule, "blueprintId" | "displayName">> & { status?: string; condition?: number },
 ) {
-  const state = await readModuleState();
+  const state = readModuleStateBlob();
   const module = state.modules.find(
     (existingModule) => existingModule.id === moduleId || existingModule.slug === moduleId,
   );
@@ -184,12 +189,12 @@ export async function updateModule(
     };
   }
 
-  await writeModuleState(state);
+  writeModuleStateBlob(state);
   return module;
 }
 
 export async function deleteModule(moduleId: string) {
-  const state = await readModuleState();
+  const state = readModuleStateBlob();
   const nextModules = state.modules.filter(
     (module) => module.id !== moduleId && module.slug !== moduleId,
   );
@@ -198,7 +203,7 @@ export async function deleteModule(moduleId: string) {
     return false;
   }
 
-  await writeModuleState({
+  writeModuleStateBlob({
     ...state,
     modules: nextModules,
   });

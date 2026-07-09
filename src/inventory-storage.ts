@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { InventoryItem, InventoryState } from "./types";
+
+const INVENTORY_STATE_NAMESPACE = "inventory";
 
 function defaultInventoryState(): InventoryState {
   return {
@@ -43,46 +43,51 @@ function parseInventoryItem(value: unknown): InventoryItem | null {
   };
 }
 
-async function ensureInventoryDir() {
-  await mkdir(dirname(getInventoryFilePath()), { recursive: true });
-}
+function readInventoryStateBlob(): InventoryState {
+  const raw = readStateBlob(INVENTORY_STATE_NAMESPACE);
 
-export function getInventoryFilePath() {
-  return join(process.cwd(), ".habitat", "inventory.json");
-}
-
-export async function readInventoryState(): Promise<InventoryState> {
-  const inventoryFilePath = getInventoryFilePath();
-
-  if (!existsSync(inventoryFilePath)) {
+  if (!raw) {
     return defaultInventoryState();
   }
 
-  const raw = await readFile(inventoryFilePath, "utf8");
-  const parsed = JSON.parse(raw) as { items?: unknown };
-  const items = Array.isArray(parsed.items)
-    ? parsed.items.map(parseInventoryItem).filter((item): item is InventoryItem => item !== null)
-    : [];
+  try {
+    const parsed = JSON.parse(raw) as { items?: unknown };
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.map(parseInventoryItem).filter((item): item is InventoryItem => item !== null)
+      : [];
 
-  return {
-    items,
-  };
+    return {
+      items,
+    };
+  } catch {
+    return defaultInventoryState();
+  }
+}
+
+function writeInventoryStateBlob(state: InventoryState) {
+  writeStateBlob(INVENTORY_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+export function getInventoryFilePath() {
+  return getSqliteDatabaseFilePath();
+}
+
+export async function readInventoryState(): Promise<InventoryState> {
+  return readInventoryStateBlob();
 }
 
 export async function writeInventoryState(state: InventoryState) {
-  const inventoryFilePath = getInventoryFilePath();
-  await ensureInventoryDir();
-  await writeFile(inventoryFilePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  writeInventoryStateBlob(state);
 }
 
 export async function hydrateInventory(items: InventoryItem[]) {
-  await writeInventoryState({
+  writeInventoryStateBlob({
     items,
   });
 }
 
 export async function listInventoryItems() {
-  const state = await readInventoryState();
+  const state = readInventoryStateBlob();
   return state.items;
 }
 
@@ -95,7 +100,7 @@ function formatDisplayName(resourceType: string) {
 }
 
 export async function addInventoryItem(resourceType: string, quantity: number, unit = "units") {
-  const state = await readInventoryState();
+  const state = readInventoryStateBlob();
   const existingItem = state.items.find((item) => item.resourceType === resourceType);
 
   if (existingItem) {
@@ -115,11 +120,11 @@ export async function addInventoryItem(resourceType: string, quantity: number, u
     });
   }
 
-  await writeInventoryState(state);
+  writeInventoryStateBlob(state);
 }
 
 export async function spendInventoryResources(required: Record<string, number>) {
-  const state = await readInventoryState();
+  const state = readInventoryStateBlob();
   state.items = state.items.map((item) => {
     const amountToSpend = required[item.resourceType] ?? 0;
 
@@ -133,5 +138,5 @@ export async function spendInventoryResources(required: Record<string, number>) 
     };
   });
 
-  await writeInventoryState(state);
+  writeInventoryStateBlob(state);
 }

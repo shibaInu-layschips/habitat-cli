@@ -1,7 +1,5 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { hydrateModules, parseStarterModules, readModuleState } from "./module-storage";
+import { deleteStateBlob, getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 
 export type KeplerRegistration = {
   habitatName: string;
@@ -19,17 +17,8 @@ type KeplerConfig = {
   planetToken: string;
 };
 
-function getRegistrationFilePathValue() {
-  return join(process.cwd(), ".habitat", "registration.json");
-}
-
-function getHabitatIdentityFilePathValue() {
-  return join(process.cwd(), ".habitat", "identity.json");
-}
-
-function getHabitatIdentityBackupFilePathValue() {
-  return join(process.cwd(), ".habitat", "identity.previous.json");
-}
+const REGISTRATION_STATE_NAMESPACE = "registration";
+const IDENTITY_STATE_NAMESPACE = "identity";
 
 class KeplerRequestError extends Error {
   status: number;
@@ -109,57 +98,66 @@ function buildFallbackUnregisterUrls(baseUrl: string, registration: KeplerRegist
   return [...new Set(urls)];
 }
 
-async function ensureRegistrationDir() {
-  await mkdir(dirname(getRegistrationFilePathValue()), { recursive: true });
-}
+type HabitatIdentityState = {
+  habitatUuid: string;
+  previousHabitatUuid: string | null;
+};
 
-async function writeHabitatUuid(habitatUuid: string) {
-  await ensureRegistrationDir();
-  await writeFile(
-    getHabitatIdentityFilePathValue(),
-    `${JSON.stringify({ habitatUuid }, null, 2)}\n`,
-    "utf8",
-  );
-}
+function readHabitatIdentityState(): HabitatIdentityState | null {
+  const raw = readStateBlob(IDENTITY_STATE_NAMESPACE);
 
-async function backupHabitatIdentity() {
-  const habitatIdentityFilePath = getHabitatIdentityFilePathValue();
-  if (!existsSync(habitatIdentityFilePath)) {
-    return;
+  if (!raw) {
+    return null;
   }
 
-  const raw = await readFile(habitatIdentityFilePath, "utf8");
-  await writeFile(getHabitatIdentityBackupFilePathValue(), raw, "utf8");
-}
+  try {
+    const parsed = JSON.parse(raw) as Partial<HabitatIdentityState>;
 
-async function readOrCreateHabitatUuid() {
-  await ensureRegistrationDir();
-  const habitatIdentityFilePath = getHabitatIdentityFilePathValue();
-
-  if (existsSync(habitatIdentityFilePath)) {
-    const raw = await readFile(habitatIdentityFilePath, "utf8");
-    const parsed = JSON.parse(raw) as { habitatUuid?: unknown };
-
-    if (typeof parsed.habitatUuid === "string" && parsed.habitatUuid.length > 0) {
-      return parsed.habitatUuid;
+    if (typeof parsed.habitatUuid !== "string" || parsed.habitatUuid.length === 0) {
+      return null;
     }
+
+    return {
+      habitatUuid: parsed.habitatUuid,
+      previousHabitatUuid:
+        typeof parsed.previousHabitatUuid === "string" && parsed.previousHabitatUuid.length > 0
+          ? parsed.previousHabitatUuid
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeHabitatIdentityState(state: HabitatIdentityState) {
+  writeStateBlob(IDENTITY_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function readOrCreateHabitatUuid() {
+  const existing = readHabitatIdentityState();
+  if (existing) {
+    return existing.habitatUuid;
   }
 
   const habitatUuid = crypto.randomUUID();
-  await writeHabitatUuid(habitatUuid);
+  writeHabitatIdentityState({ habitatUuid, previousHabitatUuid: null });
   return habitatUuid;
 }
 
-async function replaceHabitatUuid() {
-  await backupHabitatIdentity();
+function replaceHabitatUuid() {
+  const existing = readHabitatIdentityState();
   const habitatUuid = crypto.randomUUID();
-  await writeHabitatUuid(habitatUuid);
+
+  writeHabitatIdentityState({
+    habitatUuid,
+    previousHabitatUuid: existing?.habitatUuid ?? null,
+  });
+
   return habitatUuid;
 }
 
-async function writeRegistration(registration: KeplerRegistration) {
-  await ensureRegistrationDir();
-  await writeFile(getRegistrationFilePathValue(), `${JSON.stringify(registration, null, 2)}\n`, "utf8");
+function writeRegistration(registration: KeplerRegistration) {
+  writeStateBlob(REGISTRATION_STATE_NAMESPACE, `${JSON.stringify(registration, null, 2)}\n`);
 }
 
 export async function ensureLocalModulesFromRegistration(registration: KeplerRegistration | null) {
@@ -184,13 +182,17 @@ export async function ensureLocalModulesFromRegistration(registration: KeplerReg
 }
 
 export async function readRegistration(): Promise<KeplerRegistration | null> {
-  const registrationFilePath = getRegistrationFilePathValue();
-  if (!existsSync(registrationFilePath)) {
+  const raw = readStateBlob(REGISTRATION_STATE_NAMESPACE);
+  if (!raw) {
     return null;
   }
 
-  const raw = await readFile(registrationFilePath, "utf8");
-  const parsed = JSON.parse(raw) as Partial<KeplerRegistration>;
+  let parsed: Partial<KeplerRegistration>;
+  try {
+    parsed = JSON.parse(raw) as Partial<KeplerRegistration>;
+  } catch {
+    return null;
+  }
 
   if (
     typeof parsed.habitatName !== "string" ||
@@ -213,11 +215,8 @@ export async function readRegistration(): Promise<KeplerRegistration | null> {
   };
 }
 
-async function clearRegistration() {
-  const registrationFilePath = getRegistrationFilePathValue();
-  if (existsSync(registrationFilePath)) {
-    await rm(registrationFilePath, { force: true });
-  }
+function clearRegistration() {
+  deleteStateBlob(REGISTRATION_STATE_NAMESPACE);
 }
 
 function getErrorMessage(error: unknown) {
@@ -428,5 +427,5 @@ export async function unregisterHabitat() {
 }
 
 export function getRegistrationFilePath() {
-  return getRegistrationFilePathValue();
+  return getSqliteDatabaseFilePath();
 }

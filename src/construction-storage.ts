@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { ConstructionJob, ConstructionState } from "./types";
+
+const CONSTRUCTION_STATE_NAMESPACE = "construction";
 
 function defaultConstructionState(): ConstructionState {
   return {
@@ -93,45 +93,51 @@ function parseConstructionJob(value: unknown): ConstructionJob | null {
   };
 }
 
-async function ensureConstructionDir() {
-  await mkdir(dirname(getConstructionFilePath()), { recursive: true });
-}
+function readConstructionStateBlob(): ConstructionState {
+  const raw = readStateBlob(CONSTRUCTION_STATE_NAMESPACE);
 
-export function getConstructionFilePath() {
-  return join(process.cwd(), ".habitat", "construction.json");
-}
-
-export async function readConstructionState(): Promise<ConstructionState> {
-  const constructionFilePath = getConstructionFilePath();
-
-  if (!existsSync(constructionFilePath)) {
+  if (!raw) {
     return defaultConstructionState();
   }
 
-  const raw = await readFile(constructionFilePath, "utf8");
-  const parsed = JSON.parse(raw) as { jobs?: unknown };
-  const jobs = Array.isArray(parsed.jobs)
-    ? parsed.jobs.map(parseConstructionJob).filter((job): job is ConstructionJob => job !== null)
-    : [];
+  try {
+    const parsed = JSON.parse(raw) as { jobs?: unknown };
+    const jobs = Array.isArray(parsed.jobs)
+      ? parsed.jobs.map(parseConstructionJob).filter((job): job is ConstructionJob => job !== null)
+      : [];
 
-  return {
-    jobs,
-  };
+    return {
+      jobs,
+    };
+  } catch {
+    return defaultConstructionState();
+  }
+}
+
+function writeConstructionStateBlob(state: ConstructionState) {
+  writeStateBlob(CONSTRUCTION_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+export function getConstructionFilePath() {
+  return getSqliteDatabaseFilePath();
+}
+
+export async function readConstructionState(): Promise<ConstructionState> {
+  return readConstructionStateBlob();
 }
 
 export async function writeConstructionState(state: ConstructionState) {
-  await ensureConstructionDir();
-  await writeFile(getConstructionFilePath(), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  writeConstructionStateBlob(state);
 }
 
 export async function createConstructionJob(job: ConstructionJob) {
-  const state = await readConstructionState();
+  const state = readConstructionStateBlob();
   state.jobs.push(job);
-  await writeConstructionState(state);
+  writeConstructionStateBlob(state);
 }
 
 export async function listActiveConstructionJobs() {
-  const state = await readConstructionState();
+  const state = readConstructionStateBlob();
   return state.jobs.filter((job) => job.status === "active");
 }
 
@@ -141,7 +147,7 @@ export async function findActiveJobByFacility(facilityModuleSlug: string) {
 }
 
 export async function cancelActiveJobByFacility(facilityModuleSlug: string) {
-  const state = await readConstructionState();
+  const state = readConstructionStateBlob();
   const activeJobIndex = state.jobs.findIndex(
     (job) => job.facilityModuleSlug === facilityModuleSlug && job.status === "active",
   );
@@ -151,6 +157,6 @@ export async function cancelActiveJobByFacility(facilityModuleSlug: string) {
   }
 
   const [removedJob] = state.jobs.splice(activeJobIndex, 1);
-  await writeConstructionState(state);
+  writeConstructionStateBlob(state);
   return removedJob ?? null;
 }

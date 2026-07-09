@@ -1,6 +1,3 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import {
   ensureLocalModulesFromRegistration,
   readRegistration,
@@ -8,6 +5,7 @@ import {
 import { buildModuleSlug, createModule, listModules, readModuleState, writeModuleState } from "./module-storage";
 import { readConstructionState, writeConstructionState } from "./construction-storage";
 import { readSolarIrradianceReading } from "./kepler-irradiance";
+import { getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { ConstructionJob, HabitatModule } from "./types";
 
 export type SimulationState = {
@@ -36,7 +34,7 @@ export type PowerTickSummary = {
 };
 
 function getDataFilePath() {
-  return join(process.cwd(), ".habitat", "data.json");
+  return getSqliteDatabaseFilePath();
 }
 
 function defaultSimulationState(): SimulationState {
@@ -73,29 +71,21 @@ function asNumberRecord(value: unknown) {
   return record;
 }
 
-async function ensureDataDir() {
-  await mkdir(dirname(getDataFilePath()), { recursive: true });
-}
-
-async function readHabitatData() {
-  const dataFilePath = getDataFilePath();
-  if (!existsSync(dataFilePath)) {
-    return {};
-  }
-
-  const raw = await readFile(dataFilePath, "utf8");
-  const parsed = JSON.parse(raw);
-  return isObject(parsed) ? parsed : {};
-}
-
 export function getSimulationFilePath() {
   return getDataFilePath();
 }
 
 export async function readSimulationState(): Promise<SimulationState> {
-  const data = await readHabitatData();
-  const simulation = isObject(data.simulation) ? data.simulation : null;
-  const currentTick = simulation ? asNumber(simulation.currentTick) : null;
+  const raw = readStateBlob("simulation");
+  let parsed: unknown = null;
+
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+
+  const currentTick = isObject(parsed) ? asNumber(parsed.currentTick) : null;
 
   return {
     currentTick: currentTick ?? defaultSimulationState().currentTick,
@@ -103,13 +93,9 @@ export async function readSimulationState(): Promise<SimulationState> {
 }
 
 export async function writeSimulationState(state: SimulationState) {
-  const data = await readHabitatData();
-  data.simulation = {
+  writeStateBlob("simulation", `${JSON.stringify({
     currentTick: state.currentTick,
-  };
-
-  await ensureDataDir();
-  await writeFile(getDataFilePath(), `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  }, null, 2)}\n`);
 }
 
 function getRuntimeAttributes(module: HabitatModule) {

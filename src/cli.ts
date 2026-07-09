@@ -236,10 +236,8 @@ Habitat CLI for this lab:
   solar       Inspect solar irradiance status
 
 Persistence:
-  Registration is stored locally in:
-    .habitat/registration.json
-  Editable local modules are stored in:
-    .habitat/modules.json
+  Active local student-side state is stored in:
+    .habitat/habitat.sqlite
 `,
   );
 
