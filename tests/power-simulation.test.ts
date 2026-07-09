@@ -77,15 +77,18 @@ const batteryModule: HabitatModule = {
 
 let originalCwd = "";
 let workspaceDir = "";
+let originalFetch: typeof globalThis.fetch;
 
 beforeEach(async () => {
   originalCwd = process.cwd();
+  originalFetch = globalThis.fetch;
   workspaceDir = await mkdtemp(join(tmpdir(), "habitat-power-"));
   await mkdir(join(workspaceDir, ".habitat"), { recursive: true });
   process.chdir(workspaceDir);
 });
 
 afterEach(async () => {
+  globalThis.fetch = originalFetch;
   process.chdir(originalCwd);
   await rm(workspaceDir, { recursive: true, force: true });
 });
@@ -138,6 +141,205 @@ describe("power simulation", () => {
     const moduleState = await readModuleState();
     const storedBattery = findBatteryModule(moduleState.modules);
     expect(storedBattery?.runtimeAttributes.currentEnergyKwh).toBe(0);
+  });
+
+  test("charges the battery when a solar array is generating power", async () => {
+    await hydrateModules("habitat-1", [
+      commandModule,
+      {
+        ...batteryModule,
+        runtimeAttributes: {
+          ...batteryModule.runtimeAttributes,
+          status: "active",
+          currentEnergyKwh: 100,
+          energyStorageKwh: 500,
+        },
+      },
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "online",
+          powerGenerationKw: 12,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe("https://planet.turingguild.com/world/solar-irradiance");
+      expect(init?.method).toBe("GET");
+
+      return new Response(
+        JSON.stringify({
+          solarIrradiance: {
+            wPerM2: 900,
+            condition: "clear",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const summary = await runPowerTicks(100);
+
+    const moduleState = await readModuleState();
+    const storedBattery = findBatteryModule(moduleState.modules);
+
+    expect(summary.batteryEnergyAfterKwh).toBeCloseTo(100.111111, 6);
+    expect(storedBattery?.runtimeAttributes.currentEnergyKwh).toBe(summary.batteryEnergyAfterKwh);
+  });
+
+  test("does not query solar irradiance when the battery cannot receive charge", async () => {
+    await hydrateModules("habitat-1", [
+      commandModule,
+      {
+        ...batteryModule,
+        runtimeAttributes: {
+          ...batteryModule.runtimeAttributes,
+          status: "offline",
+          currentEnergyKwh: 100,
+          energyStorageKwh: 500,
+        },
+      },
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "online",
+          powerGenerationKw: 12,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    let irradianceQueried = false;
+    globalThis.fetch = async () => {
+      irradianceQueried = true;
+      throw new Error("irradiance should not be queried");
+    };
+
+    const summary = await runPowerTicks(100);
+
+    const moduleState = await readModuleState();
+    const storedBattery = findBatteryModule(moduleState.modules);
+
+    expect(irradianceQueried).toBe(false);
+    expect(summary.batteryEnergyAfterKwh).toBeCloseTo(99.944444, 6);
+    expect(storedBattery?.runtimeAttributes.currentEnergyKwh).toBe(summary.batteryEnergyAfterKwh);
+  });
+
+  test("does not query solar irradiance when the battery is already full", async () => {
+    await hydrateModules("habitat-1", [
+      commandModule,
+      {
+        ...batteryModule,
+        runtimeAttributes: {
+          ...batteryModule.runtimeAttributes,
+          status: "active",
+          currentEnergyKwh: 500,
+          energyStorageKwh: 500,
+        },
+      },
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "online",
+          powerGenerationKw: 12,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    let irradianceQueried = false;
+    globalThis.fetch = async () => {
+      irradianceQueried = true;
+      throw new Error("irradiance should not be queried");
+    };
+
+    const summary = await runPowerTicks(1);
+
+    expect(irradianceQueried).toBe(false);
+    expect(summary.solarChargingReport).toBe(
+      "No solar charging happened because the battery is already full.",
+    );
+    expect(summary.solarIrradianceWPerM2).toBeNull();
+  });
+
+  test("reports when the Kepler solar endpoint fails", async () => {
+    await hydrateModules("habitat-1", [
+      commandModule,
+      {
+        ...batteryModule,
+        runtimeAttributes: {
+          ...batteryModule.runtimeAttributes,
+          status: "active",
+          currentEnergyKwh: 100,
+          energyStorageKwh: 500,
+        },
+      },
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "online",
+          powerGenerationKw: 12,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    globalThis.fetch = async () => {
+      throw new Error("network down");
+    };
+
+    const summary = await runPowerTicks(1);
+
+    expect(summary.solarIrradianceWPerM2).toBeNull();
+    expect(summary.solarChargingReport).toBe(
+      "No solar charging happened because Kepler did not return a usable solar irradiance reading.",
+    );
   });
 
   test("rejects invalid tick counts and missing battery modules", async () => {

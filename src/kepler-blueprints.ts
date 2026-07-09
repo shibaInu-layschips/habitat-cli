@@ -134,6 +134,20 @@ function formatResponseError(status: number, statusText: string, responseBody: u
   return `Kepler blueprint request failed (${status} ${statusText}). ${detail}`;
 }
 
+function normalizeBlueprintQuery(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function parseBlueprintCatalogResponse(responseBody: unknown) {
+  if (!isObject(responseBody) || !Array.isArray(responseBody.blueprints)) {
+    return null;
+  }
+
+  return responseBody.blueprints
+    .map(parseBlueprint)
+    .filter((blueprint): blueprint is KeplerBlueprint => blueprint !== null);
+}
+
 async function sendCatalogRequest(pathname: string) {
   const { baseUrl, planetToken } = getConfig();
   const requestUrl = new URL(pathname, `${baseUrl}/`).toString();
@@ -171,20 +185,43 @@ async function sendCatalogRequest(pathname: string) {
 export async function listBlueprintCatalog() {
   const responseBody = await sendCatalogRequest("/catalog/blueprints");
 
-  if (!isObject(responseBody) || !Array.isArray(responseBody.blueprints)) {
+  const blueprints = parseBlueprintCatalogResponse(responseBody);
+
+  if (!blueprints) {
     throw new Error("Kepler returned an invalid blueprint catalog response.");
   }
 
-  return responseBody.blueprints
-    .map(parseBlueprint)
-    .filter((blueprint): blueprint is KeplerBlueprint => blueprint !== null);
+  return blueprints;
 }
 
 export async function showBlueprintCatalogEntry(blueprintId: string) {
   const responseBody = await sendCatalogRequest(`/catalog/blueprints/${encodeURIComponent(blueprintId)}`);
 
   if (isObject(responseBody) && responseBody.notFound === true) {
-    throw new KeplerBlueprintNotFoundError(blueprintId);
+    const catalogResponse = await sendCatalogRequest("/catalog/blueprints");
+
+    if (isObject(catalogResponse) && catalogResponse.notFound === true) {
+      throw new KeplerBlueprintNotFoundError(blueprintId);
+    }
+
+    const blueprints = parseBlueprintCatalogResponse(catalogResponse);
+
+    if (!blueprints) {
+      throw new Error("Kepler returned an invalid blueprint catalog response.");
+    }
+
+    const normalizedQuery = normalizeBlueprintQuery(blueprintId);
+    const matchedBlueprint =
+      blueprints.find((blueprint) => normalizeBlueprintQuery(blueprint.blueprintId) === normalizedQuery) ??
+      blueprints.find((blueprint) => normalizeBlueprintQuery(blueprint.displayName) === normalizedQuery) ??
+      blueprints.find((blueprint) => normalizeBlueprintQuery(blueprint.id) === normalizedQuery) ??
+      null;
+
+    if (!matchedBlueprint) {
+      throw new KeplerBlueprintNotFoundError(blueprintId);
+    }
+
+    return matchedBlueprint;
   }
 
   if (!isObject(responseBody) || !isObject(responseBody.blueprint)) {

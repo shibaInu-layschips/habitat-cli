@@ -1,6 +1,11 @@
 import { Command } from "commander";
 import { evaluateConstructionDryRun } from "./construction-readiness";
-import { cancelActiveJobByFacility, createConstructionJob, readConstructionState } from "./construction-storage";
+import {
+  cancelActiveJobByFacility,
+  createConstructionJob,
+  findActiveJobByFacility,
+  readConstructionState,
+} from "./construction-storage";
 import { addInventoryItem, listInventoryItems, spendInventoryResources } from "./inventory-storage";
 import {
   countModules,
@@ -16,7 +21,10 @@ import {
   readSimulationState,
   runPowerTicks,
 } from "./power-simulation";
-import { formatModuleStatusReport } from "./module-status";
+import { formatModuleListReport, formatModuleStatusReport } from "./module-status";
+import { formatModuleInfo, formatModuleStatusDetails } from "./module-report";
+import { formatPowerOverview } from "./power-overview";
+import { formatSolarStatus } from "./solar-report";
 import { formatBlueprintInputs, formatBlueprintList, formatBlueprintRuntimeAttributes } from "./blueprint-report";
 import { formatConstructionStatus } from "./construction-report";
 import { formatResourceList } from "./resource-report";
@@ -27,6 +35,7 @@ import {
   type KeplerBlueprint,
 } from "./kepler-blueprints";
 import { listResourceCatalog } from "./kepler-resources";
+import { readSolarIrradianceReading } from "./kepler-irradiance";
 import {
   ensureLocalModulesFromRegistration,
   readRegistration,
@@ -51,6 +60,24 @@ function printModule(module: HabitatModule) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function parseTickRequest(ticksArg: string, unitArg?: string) {
+  const ticks = Number(ticksArg);
+
+  if (!Number.isInteger(ticks) || ticks < 1) {
+    return null;
+  }
+
+  if (unitArg === undefined) {
+    return ticks;
+  }
+
+  if (unitArg === "hour" || unitArg === "hours") {
+    return ticks * 3600;
+  }
+
+  return null;
 }
 
 function printBatteryModule(module: HabitatModule) {
@@ -134,7 +161,55 @@ async function printHabitatStatus(registration: KeplerRegistration | null) {
   console.log(`Modules: ${moduleCount}`);
 }
 
+async function showLocalModuleById(id: string) {
+  const registration = await readRegistration();
+  await ensureLocalModulesFromRegistration(registration);
+  const module = await getModule(id);
+
+  if (!module) {
+    console.error(`No module with ID or short name "${id}" was found.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const activeJob = await findActiveJobByFacility(module.slug);
+  console.log(formatModuleInfo(module, activeJob));
+}
+
+async function showLocalModuleStatusById(id: string) {
+  const registration = await readRegistration();
+  await ensureLocalModulesFromRegistration(registration);
+  const module = await getModule(id);
+
+  if (!module) {
+    console.error(`No module with ID or short name "${id}" was found.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const activeJob = await findActiveJobByFacility(module.slug);
+  console.log(formatModuleStatusDetails(module, activeJob));
+}
+
 export async function runHabitat(argv: string[]) {
+  const solarArrayAlias = argv[2];
+
+  if (typeof solarArrayAlias === "string" && /^small-solar-array-\d+$/.test(solarArrayAlias)) {
+    await showLocalModuleById(solarArrayAlias);
+    return;
+  }
+
+  if (
+    argv[2] === "module" &&
+    typeof argv[3] === "string" &&
+    argv[4] === "status" &&
+    argv.length === 5 &&
+    argv[3] !== "status"
+  ) {
+    await showLocalModuleStatusById(argv[3]);
+    return;
+  }
+
   const program = new Command();
 
   program
@@ -157,6 +232,8 @@ Habitat CLI for this lab:
   inventory   Inspect local habitat inventory
   construction Inspect local construction jobs
   battery     Show battery status
+  power       Inspect habitat power usage and generation
+  solar       Inspect solar irradiance status
 
 Persistence:
   Registration is stored locally in:
@@ -178,9 +255,13 @@ Quick start:
   habitat resource list
   habitat tick 10
   habitat module list
+  habitat module info workshop-fabricator-1
+  habitat module workshop-fabricator-1 status
   habitat inventory list
   habitat construction status
   habitat battery status
+  habitat power overview
+  habitat solar status
   habitat unregister
 
 Required environment variables:
@@ -222,10 +303,11 @@ Required environment variables:
     .command("tick")
     .description("Advance the habitat simulation by a number of ticks.")
     .argument("<ticks>", "number of ticks to run")
-    .action(async (ticksArg) => {
-      const ticks = Number(ticksArg);
+    .argument("[unit]", "optional time unit, such as hour or hours")
+    .action(async (ticksArg, unitArg) => {
+      const ticks = parseTickRequest(ticksArg, unitArg);
 
-      if (!Number.isInteger(ticks) || ticks < 1) {
+      if (ticks === null) {
         console.error("Tick count must be a positive integer.");
         process.exitCode = 1;
         return;
@@ -239,8 +321,15 @@ Required environment variables:
         console.log(`Advanced ${summary.ticksApplied} ticks.`);
         console.log(`Tick Range: ${summary.startTick} -> ${summary.endTick}`);
         console.log(`Total Power Draw: ${formatNumber(summary.totalPowerDrawKw)} kW`);
-        console.log(`Battery Drain: ${formatNumber(summary.batteryDrainedKwh)} kWh`);
+        console.log(`Battery Drain: ${formatNumber(summary.batteryDrainKwh)} kWh`);
         console.log(`Battery Remaining: ${formatNumber(summary.batteryEnergyAfterKwh)} kWh / ${formatNumber(storageEnergy)} kWh`);
+        if (summary.solarIrradianceWPerM2 !== null) {
+          const conditionText = summary.solarCondition ? ` (${summary.solarCondition})` : "";
+          console.log(`Solar Irradiance: ${formatNumber(summary.solarIrradianceWPerM2)} W/m^2${conditionText}`);
+        }
+        console.log(`Solar Generation: ${formatNumber(summary.solarGeneratedKwh)} kWh`);
+        console.log(`Solar Charge Applied: ${formatNumber(summary.solarChargeAppliedKwh)} kWh`);
+        console.log(summary.solarChargingReport);
         for (const job of summary.completedConstructionJobs) {
           console.log(`Construction Completed: ${job.outputModuleType}`);
         }
@@ -300,6 +389,14 @@ Required environment variables:
     .command("battery")
     .description("Inspect the habitat battery.");
 
+  const powerCommand = program
+    .command("power")
+    .description("Inspect habitat power usage and generation.");
+
+  const solarCommand = program
+    .command("solar")
+    .description("Inspect solar irradiance status.");
+
   blueprintCommand
     .command("list")
     .description("List official Kepler blueprint catalog entries.")
@@ -324,9 +421,10 @@ Required environment variables:
   blueprintCommand
     .command("show")
     .description("Show one official Kepler blueprint catalog entry.")
-    .argument("<blueprint-id>", "blueprint ID")
-    .action(async (blueprintId) => {
+    .argument("<blueprint-id...>", "blueprint ID or display name")
+    .action(async (blueprintIdParts: string[]) => {
       try {
+        const blueprintId = blueprintIdParts.join(" ");
         const blueprint = await showBlueprintCatalogEntry(blueprintId);
         printBlueprint(blueprint);
       } catch (error) {
@@ -533,6 +631,44 @@ Required environment variables:
       printBatteryModule(batteryModule);
     });
 
+  powerCommand
+    .command("overview")
+    .description("Show a local habitat power overview.")
+    .action(async () => {
+      const registration = await readRegistration();
+      await ensureLocalModulesFromRegistration(registration);
+      const modules = await listModules();
+
+      if (modules.length === 0) {
+        console.log("No local habitat modules found.");
+        return;
+      }
+
+      console.log("Power Overview");
+      console.log(formatPowerOverview(modules));
+    });
+
+  solarCommand
+    .command("status")
+    .description("Show solar irradiance status from Kepler.")
+    .action(async () => {
+      try {
+        const reading = await readSolarIrradianceReading();
+
+        if (!reading) {
+          console.error("No usable solar irradiance was returned by Kepler.");
+          process.exitCode = 1;
+          return;
+        }
+
+        console.log(formatSolarStatus(reading));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to read solar irradiance.";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
   moduleCommand
     .command("create")
     .description("Create a local habitat module.")
@@ -576,9 +712,8 @@ Required environment variables:
         return;
       }
 
-      for (const module of modules) {
-        console.log(`${module.slug} | ${module.displayName} | ${String(module.runtimeAttributes.status ?? "unknown")} | condition=${String(module.runtimeAttributes.condition ?? "unknown")}`);
-      }
+      console.log("Local Modules");
+      console.log(formatModuleListReport(modules));
     });
 
   moduleCommand
@@ -627,17 +762,15 @@ Required environment variables:
     .description("Show one local habitat module.")
     .argument("<id>", "module ID")
     .action(async (id) => {
-      const registration = await readRegistration();
-      await ensureLocalModulesFromRegistration(registration);
-      const module = await getModule(id);
+      await showLocalModuleById(id);
+    });
 
-      if (!module) {
-        console.error(`No module with ID or short name "${id}" was found.`);
-        process.exitCode = 1;
-        return;
-      }
-
-      printModule(module);
+  moduleCommand
+    .command("info")
+    .description("Show detailed local habitat module info.")
+    .argument("<id>", "module ID")
+    .action(async (id) => {
+      await showLocalModuleById(id);
     });
 
   moduleCommand

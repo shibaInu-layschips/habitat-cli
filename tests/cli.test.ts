@@ -28,6 +28,30 @@ const workshopModule: HabitatModule = {
   capabilities: ["fabrication"],
 };
 
+const batteryModule: HabitatModule = {
+  id: "module-battery",
+  slug: "basic-battery-1",
+  blueprintId: "basic-battery",
+  displayName: "Basic Battery",
+  connectedTo: ["command-module-1"],
+  runtimeAttributes: {
+    condition: 99,
+    status: "active",
+    currentEnergyKwh: 120,
+    energyStorageKwh: 500,
+    reserveKwh: 50,
+    maxPowerOutputKw: 12,
+    powerDrawKw: {
+      offline: 0,
+      idle: 0,
+      online: 0,
+      active: 0,
+      damaged: 0,
+    },
+  },
+  capabilities: ["power-storage"],
+};
+
 let originalCwd = "";
 let workspaceDir = "";
 let originalLog: typeof console.log;
@@ -212,6 +236,98 @@ describe("habitat CLI", () => {
     expect(process.exitCode).not.toBe(1);
   });
 
+  test("shows one Kepler blueprint when the display name is used", async () => {
+    globalThis.fetch = async (input) => {
+      if (String(input) === "https://planet.turingguild.com/catalog/blueprints/Small%20Solar%20Array") {
+        return new Response(JSON.stringify({ error: { code: "not_found", message: "Missing" } }), {
+          status: 404,
+          statusText: "Not Found",
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      expect(String(input)).toBe("https://planet.turingguild.com/catalog/blueprints");
+
+      return new Response(
+        JSON.stringify({
+          blueprints: [
+            {
+              id: "blueprint_1",
+              blueprintId: "small-solar-array",
+              displayName: "Small Solar Array",
+              description: "Provides renewable surface power.",
+              status: "published",
+              buildTicks: 240,
+              inputs: { ferrite: 80, photovoltaicCells: 24 },
+              output: { itemType: "module", moduleType: "small-solar-array", quantity: 1 },
+              prerequisites: ["power-routing"],
+              capabilities: ["surface-power-generation"],
+              runtimeAttributes: {
+                requiredFacility: "workshop-fabricator",
+                maxPowerOutputKw: 18,
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    await runHabitat(["bun", "habitat", "blueprint", "show", "Small Solar Array"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Blueprint ID: small-solar-array");
+    expect(joinedOutput).toContain("Display Name: Small Solar Array");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows one Kepler blueprint when the display name is entered without quotes", async () => {
+    globalThis.fetch = async (input) => {
+      if (String(input).startsWith("https://planet.turingguild.com/catalog/blueprints/")) {
+        return new Response(JSON.stringify({ error: { code: "not_found", message: "Missing" } }), {
+          status: 404,
+          statusText: "Not Found",
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      expect(String(input)).toBe("https://planet.turingguild.com/catalog/blueprints");
+
+      return new Response(
+        JSON.stringify({
+          blueprints: [
+            {
+              id: "blueprint_1",
+              blueprintId: "small-solar-array",
+              displayName: "Small Solar Array",
+              description: "Provides renewable surface power.",
+              status: "published",
+              buildTicks: 240,
+              inputs: { ferrite: 80, photovoltaicCells: 24 },
+              output: { itemType: "module", moduleType: "small-solar-array", quantity: 1 },
+              prerequisites: ["power-routing"],
+              capabilities: ["surface-power-generation"],
+              runtimeAttributes: {
+                requiredFacility: "workshop-fabricator",
+                maxPowerOutputKw: 18,
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    await runHabitat(["bun", "habitat", "blueprint", "show", "small", "solar", "array"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Blueprint ID: small-solar-array");
+    expect(joinedOutput).toContain("Display Name: Small Solar Array");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
   test("shows a friendly error when a Kepler blueprint is missing", async () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify({ error: { code: "not_found", message: "Missing" } }), {
@@ -293,6 +409,154 @@ describe("habitat CLI", () => {
     expect(joinedOutput).toContain("Local Inventory");
     expect(joinedOutput).toContain("ferrite | Ferrite | 80 kg");
     expect(joinedOutput).toContain("photovoltaicCells | Photovoltaic Cells | 24 parts");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("lists local modules with labeled columns and power draw", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-command",
+        slug: "command-module-1",
+        blueprintId: "command-module",
+        displayName: "Command Module",
+        connectedTo: [],
+        runtimeAttributes: {
+          status: "active",
+          condition: 100,
+          powerDrawKw: {
+            offline: 0,
+            idle: 2,
+            active: 2,
+            damaged: 2,
+          },
+        },
+        capabilities: ["habitat-command"],
+      },
+      {
+        id: "module-battery",
+        slug: "basic-battery-1",
+        blueprintId: "basic-battery",
+        displayName: "Basic Battery",
+        connectedTo: [],
+        runtimeAttributes: {
+          status: "offline",
+          condition: 88,
+          currentEnergyKwh: 120,
+          energyStorageKwh: 500,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["power-storage"],
+      },
+    ]);
+
+    await runHabitat(["bun", "habitat", "module", "list"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Module");
+    expect(joinedOutput).toContain("Display Name");
+    expect(joinedOutput).toContain("Status");
+    expect(joinedOutput).toContain("Condition");
+    expect(joinedOutput).toContain("Power Draw (kW)");
+    expect(joinedOutput).toContain("command-module-1");
+    expect(joinedOutput).toContain("Command Module");
+    expect(joinedOutput).toContain("2 kW");
+    expect(joinedOutput).toContain("basic-battery-1");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows a power overview with state, effectiveness, draw, and generation", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-command",
+        slug: "command-module-1",
+        blueprintId: "command-module",
+        displayName: "Command Module",
+        connectedTo: [],
+        runtimeAttributes: {
+          status: "active",
+          condition: 100,
+          powerDrawKw: {
+            offline: 0,
+            idle: 2,
+            active: 2,
+            damaged: 2,
+          },
+        },
+        capabilities: ["habitat-command"],
+      },
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          status: "online",
+          condition: 97,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            online: 0,
+            active: 0,
+            damaged: 0,
+          },
+          powerGenerationKw: 12,
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    await runHabitat(["bun", "habitat", "power", "overview"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Power Overview");
+    expect(joinedOutput).toContain("Module");
+    expect(joinedOutput).toContain("State");
+    expect(joinedOutput).toContain("Effectiveness");
+    expect(joinedOutput).toContain("Power Draw (kW)");
+    expect(joinedOutput).toContain("Solar Generation (kW)");
+    expect(joinedOutput).toContain("command-module-1");
+    expect(joinedOutput).toContain("active");
+    expect(joinedOutput).toContain("small-solar-array-1");
+    expect(joinedOutput).toContain("online");
+    expect(joinedOutput).toContain("12 kW");
+    expect(joinedOutput).toContain("Total Power Draw");
+    expect(joinedOutput).toContain("Total Solar Generation");
+    expect(joinedOutput).toContain("Net Power");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows solar irradiance status from Kepler", async () => {
+    globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe("https://planet.turingguild.com/world/solar-irradiance");
+      expect(init?.method).toBe("GET");
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer test-token");
+
+      return new Response(
+        JSON.stringify({
+          solarIrradiance: {
+            wPerM2: 912,
+            condition: "clear",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    await runHabitat(["bun", "habitat", "solar", "status"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Solar Status");
+    expect(joinedOutput).toContain("Irradiance: 912 W/m^2");
+    expect(joinedOutput).toContain("Condition: clear");
     expect(errors).toEqual([]);
     expect(process.exitCode).not.toBe(1);
   });
@@ -960,7 +1224,256 @@ describe("habitat CLI", () => {
 
     const joinedOutput = output.join("\n");
     expect(joinedOutput).toContain("Advanced 1 ticks.");
+    expect(joinedOutput).toContain("Solar Generation: 0 kWh");
+    expect(joinedOutput).toContain("No solar charging happened because no effectively generating solar modules were found.");
     expect(joinedOutput).toContain("Construction Completed: small-solar-array");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("reports solar charging in tick output", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-command",
+        slug: "command-module-1",
+        blueprintId: "command-module",
+        displayName: "Command Module",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "active",
+          powerDrawKw: {
+            offline: 0,
+            idle: 2,
+            active: 2,
+            damaged: 2,
+          },
+        },
+        capabilities: ["habitat-command"],
+      },
+      {
+        ...batteryModule,
+        runtimeAttributes: {
+          ...batteryModule.runtimeAttributes,
+          status: "active",
+          currentEnergyKwh: 100,
+          energyStorageKwh: 500,
+        },
+      },
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "online",
+          powerGenerationKw: 12,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe("https://planet.turingguild.com/world/solar-irradiance");
+      expect(init?.method).toBe("GET");
+      return new Response(
+        JSON.stringify({
+          solarIrradiance: {
+            wPerM2: 900,
+            condition: "clear",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    await runHabitat(["bun", "habitat", "tick", "1", "hour"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Advanced 3600 ticks.");
+    expect(joinedOutput).toContain("Battery Drain: 2 kWh");
+    expect(joinedOutput).toContain("Solar Irradiance: 900 W/m^2 (clear)");
+    expect(joinedOutput).toContain("Solar Generation: 6 kWh");
+    expect(joinedOutput).toContain("Solar Charge Applied: 6 kWh");
+    expect(joinedOutput).toContain("Solar charging generated 6 kWh and added 6 kWh to the battery.");
+    expect(joinedOutput).toContain("Battery Remaining: 104 kWh / 500 kWh");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("accepts tick commands written as hours", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-command",
+        slug: "command-module-1",
+        blueprintId: "command-module",
+        displayName: "Command Module",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "active",
+          powerDrawKw: {
+            offline: 0,
+            idle: 2,
+            active: 2,
+            damaged: 2,
+          },
+        },
+        capabilities: ["habitat-command"],
+      },
+      {
+        id: "module-battery",
+        slug: "basic-battery-1",
+        blueprintId: "basic-battery",
+        displayName: "Basic Battery",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "active",
+          currentEnergyKwh: 500,
+          energyStorageKwh: 500,
+          powerDrawKw: {
+            offline: 0,
+            idle: 0,
+            active: 0,
+            damaged: 0,
+          },
+        },
+        capabilities: ["power-storage"],
+      },
+    ]);
+
+    await runHabitat(["bun", "habitat", "tick", "1", "hour"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Advanced 3600 ticks.");
+    expect(joinedOutput).toContain("Tick Range: 0 -> 3600");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows a built solar array through the top-level alias command", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-solar",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array Blueprint",
+        connectedTo: [],
+        runtimeAttributes: {
+          health: 100,
+          status: "online",
+          powerGenerationKw: 12,
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    await runHabitat(["bun", "habitat", "small-solar-array-1"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Module: small-solar-array-1");
+    expect(joinedOutput).toContain("Blueprint ID: small-solar-array");
+    expect(joinedOutput).toContain("Display Name: Small Solar Array Blueprint");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows detailed module info for a fabricator with an active construction job", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        ...workshopModule,
+        runtimeAttributes: {
+          ...workshopModule.runtimeAttributes,
+          status: "idle",
+        },
+      },
+      batteryModule,
+    ]);
+    await writeConstructionState({
+      jobs: [
+        {
+          id: "job-active",
+          blueprintId: "small-solar-array",
+          outputModuleType: "small-solar-array",
+          outputDisplayName: "Small Solar Array",
+          facilityModuleSlug: "workshop-fabricator-1",
+          startedAtTick: 10,
+          remainingBuildTicks: 75,
+          spentResources: { ferrite: 90, "silicate-glass": 45, "conductive-ore": 18 },
+          runtimeAttributes: { status: "online", health: 100, powerGenerationKw: 12 },
+          capabilities: ["solar-generation"],
+          status: "active",
+        },
+      ],
+    });
+
+    await runHabitat(["bun", "habitat", "module", "info", "workshop-fabricator-1"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Module Info");
+    expect(joinedOutput).toContain("Module: workshop-fabricator-1");
+    expect(joinedOutput).toContain("Declared State: idle");
+    expect(joinedOutput).toContain("Effective State: idle");
+    expect(joinedOutput).toContain("Condition: 92");
+    expect(joinedOutput).toContain("Capabilities: fabrication");
+    expect(joinedOutput).toContain("Active Construction Job");
+    expect(joinedOutput).toContain("Job ID: job-active");
+    expect(joinedOutput).toContain("Blueprint: small-solar-array");
+    expect(joinedOutput).toContain("Output Module: small-solar-array");
+    expect(joinedOutput).toContain("Remaining Build Ticks: 75");
+    expect(joinedOutput).toContain("ferrite: 90");
+    expect(joinedOutput).toContain("conductive-ore: 18");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows battery details in module info", async () => {
+    await hydrateModules("habitat-1", [batteryModule]);
+
+    await runHabitat(["bun", "habitat", "module", "info", "basic-battery-1"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Module Info");
+    expect(joinedOutput).toContain("Module: basic-battery-1");
+    expect(joinedOutput).toContain("Battery Details");
+    expect(joinedOutput).toContain("Current Energy: 120 kWh");
+    expect(joinedOutput).toContain("Storage Capacity: 500 kWh");
+    expect(joinedOutput).toContain("Reserve: 50 kWh");
+    expect(joinedOutput).toContain("Max Power Output: 12 kW");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows important status details for one module", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        ...workshopModule,
+        runtimeAttributes: {
+          ...workshopModule.runtimeAttributes,
+          status: "online",
+        },
+      },
+    ]);
+
+    await runHabitat(["bun", "habitat", "module", "workshop-fabricator-1", "status"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("Module Status");
+    expect(joinedOutput).toContain("Module: workshop-fabricator-1");
+    expect(joinedOutput).toContain("Declared State: online");
+    expect(joinedOutput).toContain("Effective State: online");
+    expect(joinedOutput).toContain("Condition: 92");
+    expect(joinedOutput).toContain("Current Power Draw: 1.25 kW");
+    expect(joinedOutput).toContain("Capabilities: fabrication");
     expect(errors).toEqual([]);
     expect(process.exitCode).not.toBe(1);
   });

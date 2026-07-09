@@ -7,6 +7,7 @@ import {
 } from "./kepler-registration";
 import { buildModuleSlug, createModule, listModules, readModuleState, writeModuleState } from "./module-storage";
 import { readConstructionState, writeConstructionState } from "./construction-storage";
+import { readSolarIrradianceReading } from "./kepler-irradiance";
 import type { ConstructionJob, HabitatModule } from "./types";
 
 export type SimulationState = {
@@ -19,10 +20,18 @@ export type PowerTickSummary = {
   startTick: number;
   endTick: number;
   totalPowerDrawKw: number;
+  batteryDrainKwh: number;
   batteryEnergyBeforeKwh: number;
   batteryEnergyAfterKwh: number;
   batteryDrainedKwh: number;
   batteryModule: HabitatModule;
+  solarIrradianceWPerM2: number | null;
+  solarCondition: string | null;
+  solarModuleCount: number;
+  solarGenerationKw: number;
+  solarGeneratedKwh: number;
+  solarChargeAppliedKwh: number;
+  solarChargingReport: string;
   completedConstructionJobs: ConstructionJob[];
 };
 
@@ -107,6 +116,31 @@ function getRuntimeAttributes(module: HabitatModule) {
   return isObject(module.runtimeAttributes) ? module.runtimeAttributes : {};
 }
 
+function findEffectivelyGeneratingSolarModules(modules: HabitatModule[]) {
+  return modules.filter((module) => getModuleSolarGenerationKw(module) > 0);
+}
+
+function getBatteryChargeBlocker(module: HabitatModule) {
+  const status = getModuleStatus(module);
+  if (status !== "online" && status !== "active") {
+    return "the battery is not online or active";
+  }
+
+  const runtimeAttributes = getRuntimeAttributes(module);
+  const currentEnergyKwh = asNumber(runtimeAttributes.currentEnergyKwh);
+  const energyStorageKwh = asNumber(runtimeAttributes.energyStorageKwh);
+
+  if (currentEnergyKwh === null || energyStorageKwh === null) {
+    return "the battery is missing charge state";
+  }
+
+  if (currentEnergyKwh >= energyStorageKwh) {
+    return "the battery is already full";
+  }
+
+  return null;
+}
+
 export function getModuleStatus(module: HabitatModule) {
   const runtimeAttributes = getRuntimeAttributes(module);
   return asString(runtimeAttributes.status) ?? "idle";
@@ -147,6 +181,24 @@ export function getTotalPowerDrawKw(modules: HabitatModule[]) {
   return modules.reduce((total, module) => total + getModulePowerDrawKw(module), 0);
 }
 
+export function getModuleSolarGenerationKw(module: HabitatModule) {
+  if (!module.capabilities.includes("solar-generation")) {
+    return 0;
+  }
+
+  const status = getModuleStatus(module);
+  if (status !== "online" && status !== "active") {
+    return 0;
+  }
+
+  const runtimeAttributes = getRuntimeAttributes(module);
+  return asNumber(runtimeAttributes.powerGenerationKw) ?? 0;
+}
+
+function getTotalPowerGenerationKw(modules: HabitatModule[]) {
+  return modules.reduce((total, module) => total + getModuleSolarGenerationKw(module), 0);
+}
+
 function getBatteryEnergyKwh(module: HabitatModule) {
   const runtimeAttributes = getRuntimeAttributes(module);
   return asNumber(runtimeAttributes.currentEnergyKwh) ?? asNumber(runtimeAttributes.energyStorageKwh) ?? 0;
@@ -157,8 +209,43 @@ function getBatteryCapacityKwh(module: HabitatModule) {
   return asNumber(runtimeAttributes.energyStorageKwh) ?? asNumber(runtimeAttributes.currentEnergyKwh) ?? 0;
 }
 
+function getSolarChargeKwhPerTick(solarIrradianceWPerM2: number, solarGenerationKw: number) {
+  const solarMultiplier = solarIrradianceWPerM2 / 900;
+  const solarEfficiency = 0.5;
+  return (solarGenerationKw * solarMultiplier * solarEfficiency) / 3600;
+}
+
+function formatIrradianceValue(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.?0+$/, "");
+}
+
 function roundKwh(value: number) {
   return Math.max(0, Number(value.toFixed(6)));
+}
+
+function describeSolarChargingFailure(
+  solarModuleCount: number,
+  batteryChargeBlocker: string | null,
+  solarIrradianceWPerM2: number | null,
+  solarCondition: string | null,
+) {
+  if (solarModuleCount === 0) {
+    return "No solar charging happened because no effectively generating solar modules were found.";
+  }
+
+  if (batteryChargeBlocker !== null) {
+    return `No solar charging happened because ${batteryChargeBlocker}.`;
+  }
+
+  if (solarIrradianceWPerM2 === null) {
+    return "No solar charging happened because Kepler did not return a usable solar irradiance reading.";
+  }
+
+  if (solarIrradianceWPerM2 <= 0) {
+    return `No solar charging happened because solar irradiance was ${formatIrradianceValue(solarIrradianceWPerM2)} W/m^2 (${solarCondition ?? "unknown"}).`;
+  }
+
+  return "No solar charging happened.";
 }
 
 async function completeConstructionJob(job: ConstructionJob) {
@@ -222,14 +309,40 @@ export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSu
   const totalPowerDrawKw = getTotalPowerDrawKw(moduleState.modules);
   const batteryEnergyBeforeKwh = getBatteryEnergyKwh(batteryModule);
   const batteryCapacityKwh = getBatteryCapacityKwh(batteryModule);
+  const solarModules = findEffectivelyGeneratingSolarModules(moduleState.modules);
+  const batteryChargeBlocker = getBatteryChargeBlocker(batteryModule);
+  let solarIrradianceWPerM2: number | null = null;
+  let solarCondition: string | null = null;
+
+  if (solarModules.length > 0 && batteryChargeBlocker === null) {
+    const irradianceReading = await readSolarIrradianceReading();
+    solarIrradianceWPerM2 = irradianceReading?.wPerM2 ?? null;
+    solarCondition = irradianceReading?.condition ?? null;
+  }
+
+  const solarGenerationKw = getTotalPowerGenerationKw(solarModules);
   const drainPerTickKwh = totalPowerDrawKw / 3600;
+  const chargePerTickKwh =
+    solarIrradianceWPerM2 !== null ? getSolarChargeKwhPerTick(solarIrradianceWPerM2, solarGenerationKw) : 0;
+  const batteryDrainKwh = drainPerTickKwh * ticksRequested;
+  const solarGeneratedKwh = chargePerTickKwh * ticksRequested;
 
   let batteryEnergyAfterKwh = batteryEnergyBeforeKwh;
 
   for (let index = 0; index < ticksRequested; index += 1) {
     simulationState.currentTick += 1;
-    batteryEnergyAfterKwh = roundKwh(batteryEnergyAfterKwh - drainPerTickKwh);
+    batteryEnergyAfterKwh = Math.min(
+      batteryCapacityKwh,
+      Math.max(0, batteryEnergyAfterKwh - drainPerTickKwh) + chargePerTickKwh,
+    );
   }
+
+  batteryEnergyAfterKwh = roundKwh(batteryEnergyAfterKwh);
+  const solarChargeAppliedKwh = roundKwh(Math.max(0, batteryEnergyAfterKwh - (batteryEnergyBeforeKwh - batteryDrainKwh)));
+  const solarChargingReport =
+    solarGeneratedKwh > 0
+      ? `Solar charging generated ${formatIrradianceValue(solarGeneratedKwh)} kWh and added ${formatIrradianceValue(solarChargeAppliedKwh)} kWh to the battery.`
+      : describeSolarChargingFailure(solarModules.length, batteryChargeBlocker, solarIrradianceWPerM2, solarCondition);
 
   const batteryRuntimeAttributes = getRuntimeAttributes(batteryModule);
   batteryRuntimeAttributes.currentEnergyKwh = batteryEnergyAfterKwh;
@@ -246,10 +359,18 @@ export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSu
     startTick,
     endTick: simulationState.currentTick,
     totalPowerDrawKw,
+    batteryDrainKwh,
     batteryEnergyBeforeKwh,
     batteryEnergyAfterKwh,
-    batteryDrainedKwh: roundKwh(batteryEnergyBeforeKwh - batteryEnergyAfterKwh),
+    batteryDrainedKwh: roundKwh(batteryDrainKwh),
     batteryModule,
+    solarIrradianceWPerM2,
+    solarCondition,
+    solarModuleCount: solarModules.length,
+    solarGenerationKw,
+    solarGeneratedKwh: roundKwh(solarGeneratedKwh),
+    solarChargeAppliedKwh,
+    solarChargingReport,
     completedConstructionJobs,
   };
 }
