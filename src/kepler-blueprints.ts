@@ -10,6 +10,11 @@ export class KeplerBlueprintNotFoundError extends Error {
   }
 }
 
+export type KeplerRequiredFacility = {
+  moduleType: string;
+  minimumLevel: number;
+};
+
 export type KeplerBlueprint = {
   id: string;
   blueprintId: string;
@@ -19,6 +24,7 @@ export type KeplerBlueprint = {
   buildTicks: number;
   inputs: Record<string, unknown>;
   output: Record<string, unknown>;
+  requiredFacility: KeplerRequiredFacility | null;
   prerequisites: string[];
   capabilities: string[];
   runtimeAttributes: Record<string, unknown>;
@@ -62,6 +68,23 @@ function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function parseRequiredFacility(value: unknown): KeplerRequiredFacility | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  const moduleType = asString(value.moduleType);
+
+  if (!moduleType) {
+    return null;
+  }
+
+  return {
+    moduleType,
+    minimumLevel: asNumber(value.minimumLevel),
+  };
+}
+
 function parseBlueprint(value: unknown): KeplerBlueprint | null {
   if (!isObject(value)) {
     return null;
@@ -84,6 +107,7 @@ function parseBlueprint(value: unknown): KeplerBlueprint | null {
     buildTicks: asNumber(value.buildTicks),
     inputs: asRecord(value.inputs),
     output: asRecord(value.output),
+    requiredFacility: parseRequiredFacility(value.requiredFacility),
     prerequisites: asStringArray(value.prerequisites),
     capabilities: asStringArray(value.capabilities),
     runtimeAttributes: asRecord(value.runtimeAttributes),

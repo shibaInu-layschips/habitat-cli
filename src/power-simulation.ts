@@ -5,8 +5,9 @@ import {
   ensureLocalModulesFromRegistration,
   readRegistration,
 } from "./kepler-registration";
-import { readModuleState, writeModuleState } from "./module-storage";
-import type { HabitatModule } from "./types";
+import { buildModuleSlug, createModule, listModules, readModuleState, writeModuleState } from "./module-storage";
+import { readConstructionState, writeConstructionState } from "./construction-storage";
+import type { ConstructionJob, HabitatModule } from "./types";
 
 export type SimulationState = {
   currentTick: number;
@@ -22,6 +23,7 @@ export type PowerTickSummary = {
   batteryEnergyAfterKwh: number;
   batteryDrainedKwh: number;
   batteryModule: HabitatModule;
+  completedConstructionJobs: ConstructionJob[];
 };
 
 function getDataFilePath() {
@@ -159,6 +161,45 @@ function roundKwh(value: number) {
   return Math.max(0, Number(value.toFixed(6)));
 }
 
+async function completeConstructionJob(job: ConstructionJob) {
+  const existingModules = await listModules();
+  const nextIndex =
+    existingModules.filter((module) => module.blueprintId === job.outputModuleType).length + 1;
+  const slug = buildModuleSlug(job.outputModuleType, nextIndex);
+
+  await createModule({
+    id: `${job.outputModuleType}-${crypto.randomUUID()}`,
+    slug,
+    blueprintId: job.outputModuleType,
+    displayName: job.outputDisplayName,
+    connectedTo: [],
+    runtimeAttributes: job.runtimeAttributes,
+    capabilities: job.capabilities,
+  });
+}
+
+async function advanceConstructionJobs(ticksApplied: number) {
+  const constructionState = await readConstructionState();
+  const completedJobs: ConstructionJob[] = [];
+
+  for (const job of constructionState.jobs) {
+    if (job.status !== "active") {
+      continue;
+    }
+
+    job.remainingBuildTicks = Math.max(0, job.remainingBuildTicks - ticksApplied);
+
+    if (job.remainingBuildTicks === 0) {
+      job.status = "complete";
+      await completeConstructionJob(job);
+      completedJobs.push({ ...job });
+    }
+  }
+
+  await writeConstructionState(constructionState);
+  return completedJobs;
+}
+
 export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSummary> {
   if (!Number.isInteger(ticksRequested) || ticksRequested < 1) {
     throw new Error("Tick count must be a positive integer.");
@@ -197,6 +238,7 @@ export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSu
 
   await writeModuleState(moduleState);
   await writeSimulationState(simulationState);
+  const completedConstructionJobs = await advanceConstructionJobs(ticksRequested);
 
   return {
     ticksRequested,
@@ -208,5 +250,6 @@ export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSu
     batteryEnergyAfterKwh,
     batteryDrainedKwh: roundKwh(batteryEnergyBeforeKwh - batteryEnergyAfterKwh),
     batteryModule,
+    completedConstructionJobs,
   };
 }

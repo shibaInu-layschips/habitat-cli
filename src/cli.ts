@@ -1,4 +1,7 @@
 import { Command } from "commander";
+import { evaluateConstructionDryRun } from "./construction-readiness";
+import { cancelActiveJobByFacility, createConstructionJob, readConstructionState } from "./construction-storage";
+import { addInventoryItem, listInventoryItems, spendInventoryResources } from "./inventory-storage";
 import {
   countModules,
   createModule,
@@ -14,7 +17,8 @@ import {
   runPowerTicks,
 } from "./power-simulation";
 import { formatModuleStatusReport } from "./module-status";
-import { formatBlueprintList } from "./blueprint-report";
+import { formatBlueprintInputs, formatBlueprintList, formatBlueprintRuntimeAttributes } from "./blueprint-report";
+import { formatConstructionStatus } from "./construction-report";
 import { formatResourceList } from "./resource-report";
 import {
   KeplerBlueprintNotFoundError,
@@ -65,11 +69,26 @@ function printBatteryModule(module: HabitatModule) {
 }
 
 function printBlueprint(blueprint: KeplerBlueprint) {
+  const requiredFacility =
+    blueprint.requiredFacility?.moduleType
+      ? blueprint.requiredFacility.moduleType
+      : typeof blueprint.runtimeAttributes.requiredFacility === "string"
+        ? blueprint.runtimeAttributes.requiredFacility
+      : "Unknown";
+  const outputModuleType =
+    typeof blueprint.output.moduleType === "string" ? blueprint.output.moduleType : "Unknown";
+
   console.log(`Blueprint ID: ${blueprint.blueprintId}`);
   console.log(`Catalog ID: ${blueprint.id}`);
   console.log(`Display Name: ${blueprint.displayName}`);
   console.log(`Status: ${blueprint.status || "unknown"}`);
   console.log(`Build Ticks: ${blueprint.buildTicks}`);
+  console.log("Required Resources");
+  console.log(formatBlueprintInputs(blueprint.inputs));
+  console.log(`Required Facility: ${requiredFacility}`);
+  console.log(`Output Module Type: ${outputModuleType}`);
+  console.log("Runtime Attributes");
+  console.log(formatBlueprintRuntimeAttributes(blueprint.runtimeAttributes));
   console.log(`Description: ${blueprint.description || "None"}`);
   console.log(
     `Prerequisites: ${blueprint.prerequisites.length > 0 ? blueprint.prerequisites.join(", ") : "None"}`,
@@ -78,11 +97,18 @@ function printBlueprint(blueprint: KeplerBlueprint) {
     `Capabilities: ${blueprint.capabilities.length > 0 ? blueprint.capabilities.join(", ") : "None"}`,
   );
   console.log(
-    `Inputs: ${Object.keys(blueprint.inputs).length > 0 ? JSON.stringify(blueprint.inputs) : "{}"}`,
-  );
-  console.log(
     `Output: ${Object.keys(blueprint.output).length > 0 ? JSON.stringify(blueprint.output) : "{}"}`,
   );
+}
+
+function getConstructionFailureMessage(result: Awaited<ReturnType<typeof evaluateConstructionDryRun>>) {
+  const blockingChecks = result.checks.filter((check) => !check.passed);
+
+  if (blockingChecks.length === 0) {
+    return result.startDetail;
+  }
+
+  return [result.startDetail, ...blockingChecks.map((check) => check.detail)].join(" ");
 }
 
 async function printHabitatStatus(registration: KeplerRegistration | null) {
@@ -128,6 +154,8 @@ Habitat CLI for this lab:
   blueprint   Read the Kepler blueprint catalog
   resource    Read the Kepler resource catalog
   module      Create, inspect, update, and delete local habitat modules
+  inventory   Inspect local habitat inventory
+  construction Inspect local construction jobs
   battery     Show battery status
 
 Persistence:
@@ -150,6 +178,8 @@ Quick start:
   habitat resource list
   habitat tick 10
   habitat module list
+  habitat inventory list
+  habitat construction status
   habitat battery status
   habitat unregister
 
@@ -211,6 +241,9 @@ Required environment variables:
         console.log(`Total Power Draw: ${formatNumber(summary.totalPowerDrawKw)} kW`);
         console.log(`Battery Drain: ${formatNumber(summary.batteryDrainedKwh)} kWh`);
         console.log(`Battery Remaining: ${formatNumber(summary.batteryEnergyAfterKwh)} kWh / ${formatNumber(storageEnergy)} kWh`);
+        for (const job of summary.completedConstructionJobs) {
+          console.log(`Construction Completed: ${job.outputModuleType}`);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to advance habitat ticks.";
         console.error(message);
@@ -250,6 +283,18 @@ Required environment variables:
   const resourceCommand = program
     .command("resource")
     .description("Read the official Kepler resource catalog.");
+
+  const inventoryCommand = program
+    .command("inventory")
+    .description("Inspect local habitat inventory.");
+
+  const constructionCommand = program
+    .command("construction")
+    .description("Inspect local construction jobs.");
+
+  const constructCommand = program
+    .command("construct")
+    .description("Validate or start local module construction.");
 
   const batteryCommand = program
     .command("battery")
@@ -312,6 +357,158 @@ Required environment variables:
         console.log(formatResourceList(resources));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to list Kepler resources.";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  inventoryCommand
+    .command("list")
+    .description("List local habitat inventory.")
+    .action(async () => {
+      const items = await listInventoryItems();
+
+      if (items.length === 0) {
+        console.log("No local inventory recorded.");
+        return;
+      }
+
+      console.log("Local Inventory");
+
+      for (const item of items) {
+        console.log(`${item.resourceType} | ${item.displayName} | ${formatNumber(item.quantity)} ${item.unit}`);
+      }
+    });
+
+  inventoryCommand
+    .command("add")
+    .description("Add one local inventory resource amount.")
+    .argument("<resource-type>", "resource type")
+    .argument("<quantity>", "resource quantity")
+    .action(async (resourceType, quantityArg) => {
+      const quantity = Number(quantityArg);
+
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        console.error("Quantity must be a positive number.");
+        process.exitCode = 1;
+        return;
+      }
+
+      await addInventoryItem(resourceType, quantity);
+      console.log(`Added ${formatNumber(quantity)} of "${resourceType}" to local inventory.`);
+    });
+
+  constructionCommand
+    .command("status")
+    .description("Show local construction job status.")
+    .action(async () => {
+      const state = await readConstructionState();
+
+      if (state.jobs.length === 0) {
+        console.log("No local construction jobs found.");
+        return;
+      }
+
+      console.log("Construction Status");
+      console.log(formatConstructionStatus(state.jobs));
+    });
+
+  constructionCommand
+    .command("cancel")
+    .description("Cancel the active construction job for one facility.")
+    .argument("<facility-module-slug>", "facility module slug")
+    .action(async (facilityModuleSlug) => {
+      const canceledJob = await cancelActiveJobByFacility(facilityModuleSlug);
+
+      if (!canceledJob) {
+        console.error(`No active construction job for facility "${facilityModuleSlug}" was found.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`Canceled construction on "${facilityModuleSlug}".`);
+      console.log("No module was created.");
+      console.log("Spent materials were not refunded.");
+    });
+
+  constructCommand
+    .argument("<blueprint-id>", "blueprint ID")
+    .option("--dry-run", "check whether local construction can start without changing state")
+    .action(async (blueprintId, options) => {
+      try {
+        const registration = await readRegistration();
+        await ensureLocalModulesFromRegistration(registration);
+        const blueprint = await showBlueprintCatalogEntry(blueprintId);
+        const result = await evaluateConstructionDryRun(blueprint);
+        const outputModuleType =
+          typeof result.blueprint.output.moduleType === "string"
+            ? result.blueprint.output.moduleType
+            : "Unknown";
+        const resourcesWouldSpend =
+          Object.keys(result.blueprint.inputs).length > 0 ? JSON.stringify(result.blueprint.inputs) : "{}";
+
+        if (options.dryRun) {
+          console.log("Construction Dry Run");
+          console.log(`Blueprint: ${result.blueprint.blueprintId}`);
+          console.log(`${result.requiredFacilityExists.label}: ${result.requiredFacilityExists.passed ? "PASS" : "FAIL"} - ${result.requiredFacilityExists.detail}`);
+          console.log(`${result.fabricatorAvailable.label}: ${result.fabricatorAvailable.passed ? "PASS" : "FAIL"} - ${result.fabricatorAvailable.detail}`);
+          console.log(`${result.supplyCacheOnline.label}: ${result.supplyCacheOnline.passed ? "PASS" : "FAIL"} - ${result.supplyCacheOnline.detail}`);
+          console.log(`${result.prerequisitesMet.label}: ${result.prerequisitesMet.passed ? "PASS" : "FAIL"} - ${result.prerequisitesMet.detail}`);
+          console.log(`${result.inventoryEnough.label}: ${result.inventoryEnough.passed ? "PASS" : "FAIL"} - ${result.inventoryEnough.detail}`);
+          console.log(`Module Would Create: ${outputModuleType}`);
+          console.log(`Resources Would Spend: ${resourcesWouldSpend}`);
+          console.log(`Construction Can Start: ${result.canStart ? "YES" : "NO"} - ${result.startDetail}`);
+
+          if (!result.canStart) {
+            process.exitCode = 1;
+          }
+          return;
+        }
+
+        if (!result.canStart || !result.facilityModuleSlug) {
+          console.error(getConstructionFailureMessage(result));
+          process.exitCode = 1;
+          return;
+        }
+
+        const simulationState = await readSimulationState();
+        await spendInventoryResources(result.blueprint.inputs as Record<string, number>);
+        const job = {
+          id: crypto.randomUUID(),
+          blueprintId: result.blueprint.blueprintId,
+          outputModuleType,
+          outputDisplayName: result.blueprint.displayName,
+          facilityModuleSlug: result.facilityModuleSlug,
+          startedAtTick: simulationState.currentTick,
+          remainingBuildTicks: result.blueprint.buildTicks,
+          spentResources: result.blueprint.inputs as Record<string, number>,
+          runtimeAttributes: {
+            ...result.blueprint.runtimeAttributes,
+            status:
+              typeof result.blueprint.runtimeAttributes.status === "string"
+                ? result.blueprint.runtimeAttributes.status
+                : "online",
+            health:
+              typeof result.blueprint.runtimeAttributes.health === "number"
+                ? result.blueprint.runtimeAttributes.health
+                : 100,
+          },
+          capabilities: result.blueprint.capabilities,
+          status: "active" as const,
+        };
+        await createConstructionJob(job);
+        console.log("Started Construction Job");
+        console.log(`Job ID: ${job.id}`);
+        console.log(`Module Will Create: ${job.outputModuleType}`);
+        console.log(`Resources Spent: ${JSON.stringify(job.spentResources)}`);
+        console.log(`Remaining Build Ticks: ${job.remainingBuildTicks}`);
+      } catch (error) {
+        const message =
+          error instanceof KeplerBlueprintNotFoundError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : "Unable to evaluate construction readiness.";
         console.error(message);
         process.exitCode = 1;
       }

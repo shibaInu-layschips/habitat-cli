@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readConstructionState, writeConstructionState } from "../src/construction-storage";
 import {
   findBatteryModule,
   getModulePowerDrawKw,
@@ -10,7 +11,7 @@ import {
   runPowerTicks,
   writeSimulationState,
 } from "../src/power-simulation";
-import { hydrateModules, readModuleState } from "../src/module-storage";
+import { hydrateModules, listModules, readModuleState } from "../src/module-storage";
 import type { HabitatModule } from "../src/types";
 
 const commandModule: HabitatModule = {
@@ -161,5 +162,71 @@ describe("power simulation", () => {
 
     expect(missingBatteryError).toBeInstanceOf(Error);
     expect((missingBatteryError as Error).message).toContain("No battery module was found");
+  });
+
+  test("completes construction jobs during ticks and creates the finished module", async () => {
+    await hydrateModules("habitat-1", [commandModule, batteryModule]);
+    await writeConstructionState({
+      jobs: [
+        {
+          id: "job-1",
+          blueprintId: "small-solar-array",
+          outputModuleType: "small-solar-array",
+          outputDisplayName: "Small Solar Array",
+          facilityModuleSlug: "workshop-fabricator-1",
+          startedAtTick: 0,
+          remainingBuildTicks: 2,
+          spentResources: { ferrite: 90 },
+          runtimeAttributes: { status: "online", health: 100, powerGenerationKw: 12 },
+          capabilities: ["solar-generation"],
+          status: "active",
+        },
+      ],
+    });
+
+    const summary = await runPowerTicks(2);
+
+    const modules = await listModules();
+    const construction = await readConstructionState();
+    const finishedModule = modules.find((module) => module.blueprintId === "small-solar-array");
+
+    expect(finishedModule).toBeDefined();
+    expect(finishedModule?.runtimeAttributes.status).toBe("online");
+    expect(construction.jobs[0]?.status).toBe("complete");
+    expect(construction.jobs[0]?.remainingBuildTicks).toBe(0);
+    expect(summary.completedConstructionJobs).toHaveLength(1);
+    expect(summary.completedConstructionJobs[0]?.outputModuleType).toBe("small-solar-array");
+  });
+
+  test("does not complete construction before enough ticks have elapsed", async () => {
+    await hydrateModules("habitat-1", [commandModule, batteryModule]);
+    await writeConstructionState({
+      jobs: [
+        {
+          id: "job-1",
+          blueprintId: "small-solar-array",
+          outputModuleType: "small-solar-array",
+          outputDisplayName: "Small Solar Array",
+          facilityModuleSlug: "workshop-fabricator-1",
+          startedAtTick: 0,
+          remainingBuildTicks: 5,
+          spentResources: { ferrite: 90 },
+          runtimeAttributes: { status: "online", health: 100, powerGenerationKw: 12 },
+          capabilities: ["solar-generation"],
+          status: "active",
+        },
+      ],
+    });
+
+    const summary = await runPowerTicks(2);
+
+    const modules = await listModules();
+    const construction = await readConstructionState();
+    const finishedModule = modules.find((module) => module.blueprintId === "small-solar-array");
+
+    expect(finishedModule).toBeUndefined();
+    expect(construction.jobs[0]?.status).toBe("active");
+    expect(construction.jobs[0]?.remainingBuildTicks).toBe(3);
+    expect(summary.completedConstructionJobs).toEqual([]);
   });
 });

@@ -14,3 +14,32 @@ export type HabitatModuleState = {
   habitatId: string | null;
   modules: HabitatModule[];
 };
+
+export type InventoryItem = {
+  resourceType: string;
+  displayName: string;
+  quantity: number;
+  unit: string;
+};
+
+export type InventoryState = {
+  items: InventoryItem[];
+};
+
+export type ConstructionJob = {
+  id: string;
+  blueprintId: string;
+  outputModuleType: string;
+  outputDisplayName: string;
+  facilityModuleSlug: string;
+  startedAtTick: number;
+  remainingBuildTicks: number;
+  spentResources: Record<string, number>;
+  runtimeAttributes: ModuleRuntimeAttributes;
+  capabilities: string[];
+  status: "active" | "complete";
+};
+
+export type ConstructionState = {
+  jobs: ConstructionJob[];
+};
