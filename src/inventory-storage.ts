@@ -1,3 +1,4 @@
+import { getHabitatApiJson, putHabitatApiJson } from "./habitat-api-client";
 import { getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { InventoryItem, InventoryState } from "./types";
 
@@ -68,26 +69,47 @@ function writeInventoryStateBlob(state: InventoryState) {
   writeStateBlob(INVENTORY_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+function shouldUseLocalInventoryStorage() {
+  return process.env.HABITAT_BACKEND_RUNTIME === "1" || !process.env.HABITAT_API_BASE_URL?.trim();
+}
+
+async function readInventoryStateRemote(): Promise<InventoryState> {
+  return await getHabitatApiJson<InventoryState>("/inventory");
+}
+
+async function writeInventoryStateRemote(state: InventoryState) {
+  return await putHabitatApiJson<InventoryState>("/inventory", state);
+}
+
 export function getInventoryFilePath() {
   return getSqliteDatabaseFilePath();
 }
 
 export async function readInventoryState(): Promise<InventoryState> {
-  return readInventoryStateBlob();
+  if (shouldUseLocalInventoryStorage()) {
+    return readInventoryStateBlob();
+  }
+
+  return await readInventoryStateRemote();
 }
 
 export async function writeInventoryState(state: InventoryState) {
-  writeInventoryStateBlob(state);
+  if (shouldUseLocalInventoryStorage()) {
+    writeInventoryStateBlob(state);
+    return;
+  }
+
+  await writeInventoryStateRemote(state);
 }
 
 export async function hydrateInventory(items: InventoryItem[]) {
-  writeInventoryStateBlob({
+  await writeInventoryState({
     items,
   });
 }
 
 export async function listInventoryItems() {
-  const state = readInventoryStateBlob();
+  const state = await readInventoryState();
   return state.items;
 }
 
@@ -100,7 +122,7 @@ function formatDisplayName(resourceType: string) {
 }
 
 export async function addInventoryItem(resourceType: string, quantity: number, unit = "units") {
-  const state = readInventoryStateBlob();
+  const state = await readInventoryState();
   const existingItem = state.items.find((item) => item.resourceType === resourceType);
 
   if (existingItem) {
@@ -120,11 +142,28 @@ export async function addInventoryItem(resourceType: string, quantity: number, u
     });
   }
 
-  writeInventoryStateBlob(state);
+  await writeInventoryState(state);
+}
+
+export async function removeInventoryItem(resourceType: string, quantity: number) {
+  const state = await readInventoryState();
+  const existingItem = state.items.find((item) => item.resourceType === resourceType);
+
+  if (!existingItem) {
+    return false;
+  }
+
+  existingItem.quantity = Math.max(0, existingItem.quantity - quantity);
+  if (existingItem.quantity === 0) {
+    state.items = state.items.filter((item) => item.resourceType !== resourceType);
+  }
+
+  await writeInventoryState(state);
+  return true;
 }
 
 export async function spendInventoryResources(required: Record<string, number>) {
-  const state = readInventoryStateBlob();
+  const state = await readInventoryState();
   state.items = state.items.map((item) => {
     const amountToSpend = required[item.resourceType] ?? 0;
 
@@ -138,5 +177,5 @@ export async function spendInventoryResources(required: Record<string, number>) 
     };
   });
 
-  writeInventoryStateBlob(state);
+  await writeInventoryState(state);
 }

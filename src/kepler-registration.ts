@@ -1,4 +1,5 @@
 import { hydrateModules, parseStarterModules, readModuleState } from "./module-storage";
+import { logKeplerRequest } from "./kepler-logging";
 import { deleteStateBlob, getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 
 export type KeplerRegistration = {
@@ -127,6 +128,10 @@ function readHabitatIdentityState(): HabitatIdentityState | null {
   } catch {
     return null;
   }
+}
+
+export function readHabitatUuid() {
+  return readHabitatIdentityState()?.habitatUuid ?? null;
 }
 
 function writeHabitatIdentityState(state: HabitatIdentityState) {
@@ -286,10 +291,12 @@ async function sendRegisterRequest(
       body: JSON.stringify({ displayName: habitatName, habitatUuid }),
     });
   } catch (error) {
+    logKeplerRequest("POST", "/habitats/register", "network error");
     throw new Error(`Unable to reach Kepler at ${registerUrl}: ${getErrorMessage(error)}`);
   }
 
   const responseBody = await parseJsonResponse(response);
+  logKeplerRequest("POST", "/habitats/register", response.status);
 
   if (!response.ok) {
     throw new KeplerRequestError(response.status, response.statusText, responseBody);
@@ -406,6 +413,7 @@ export async function unregisterHabitat() {
           Accept: "application/json",
         },
       });
+      logKeplerRequest("DELETE", new URL(unregisterUrl).pathname, response.status);
 
       if (response.ok || response.status === 404) {
         await clearRegistration();

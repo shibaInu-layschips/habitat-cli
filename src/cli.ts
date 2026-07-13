@@ -6,14 +6,9 @@ import {
   findActiveJobByFacility,
   readConstructionState,
 } from "./construction-storage";
-import { addInventoryItem, listInventoryItems, spendInventoryResources } from "./inventory-storage";
 import {
   countModules,
-  createModule,
-  deleteModule,
-  getModule,
   listModules,
-  updateModule,
 } from "./module-storage";
 import {
   findBatteryModule,
@@ -28,21 +23,29 @@ import { formatSolarStatus } from "./solar-report";
 import { formatBlueprintInputs, formatBlueprintList, formatBlueprintRuntimeAttributes } from "./blueprint-report";
 import { formatConstructionStatus } from "./construction-report";
 import { formatResourceList } from "./resource-report";
+import { KeplerBlueprintNotFoundError, showBlueprintCatalogEntry, type KeplerBlueprint } from "./kepler-blueprints";
+import type { KeplerResource } from "./kepler-resources";
+import type { SolarIrradianceReading } from "./kepler-irradiance";
+import { ensureLocalModulesFromRegistration, readRegistration } from "./kepler-registration";
 import {
-  KeplerBlueprintNotFoundError,
-  listBlueprintCatalog,
-  showBlueprintCatalogEntry,
-  type KeplerBlueprint,
-} from "./kepler-blueprints";
-import { listResourceCatalog } from "./kepler-resources";
-import { readSolarIrradianceReading } from "./kepler-irradiance";
-import {
-  ensureLocalModulesFromRegistration,
-  readRegistration,
-  registerHabitat,
-  unregisterHabitat,
-  type KeplerRegistration,
-} from "./kepler-registration";
+  getHabitatApiJson,
+  deleteHabitatApiJson,
+  postHabitatApiJson,
+  putHabitatApiJson,
+  HabitatApiError,
+  type HabitatInventoryStateResponse,
+  type HabitatModuleDeleteResponse,
+  type HabitatModuleMutationResponse,
+  type HabitatModuleResponse,
+  type HabitatModuleStateResponse,
+  type HabitatBlueprintListResponse,
+  type HabitatBlueprintResponse,
+  type HabitatRegistrationResponse,
+  type HabitatResourceListResponse,
+  type HabitatStatusResponse,
+  type HabitatSolarIrradianceResponse,
+  type HabitatUnregisterResponse,
+} from "./habitat-api-client";
 import type { HabitatModule } from "./types";
 
 const allowedModuleStatuses = ["offline", "idle", "online", "active", "damaged"] as const;
@@ -60,6 +63,72 @@ function printModule(module: HabitatModule) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof HabitatApiError) {
+    const responseBody = error.responseBody;
+
+    if (typeof responseBody === "object" && responseBody !== null) {
+      const body = responseBody as Record<string, unknown>;
+      if (typeof body.error === "string") {
+        return body.error;
+      }
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+async function readRemoteModule(moduleId: string) {
+  const response = await getHabitatApiJson<HabitatModuleResponse>(`/modules/${encodeURIComponent(moduleId)}`);
+  return response.module;
+}
+
+async function readRemoteModules() {
+  const response = await getHabitatApiJson<HabitatModuleStateResponse>("/modules");
+  return response.modules;
+}
+
+async function createRemoteModule(module: HabitatModule) {
+  const response = await postHabitatApiJson<HabitatModuleMutationResponse>("/modules", module);
+  return response.module;
+}
+
+async function updateRemoteModule(moduleId: string, updates: Record<string, unknown>) {
+  const response = await putHabitatApiJson<HabitatModuleMutationResponse>(
+    `/modules/${encodeURIComponent(moduleId)}`,
+    updates,
+  );
+  return response.module;
+}
+
+async function deleteRemoteModule(moduleId: string) {
+  const response = await deleteHabitatApiJson<HabitatModuleDeleteResponse>(`/modules/${encodeURIComponent(moduleId)}`);
+  return response.deleted;
+}
+
+async function readRemoteInventoryItems() {
+  const response = await getHabitatApiJson<HabitatInventoryStateResponse>("/inventory");
+  return response.items;
+}
+
+async function addRemoteInventoryItem(resourceType: string, quantity: number) {
+  return await postHabitatApiJson<HabitatInventoryStateResponse>("/inventory/add", {
+    resourceType,
+    quantity,
+  });
+}
+
+async function removeRemoteInventoryItem(resourceType: string, quantity: number) {
+  return await postHabitatApiJson<HabitatInventoryStateResponse>("/inventory/remove", {
+    resourceType,
+    quantity,
+  });
 }
 
 function parseTickRequest(ticksArg: string, unitArg?: string) {
@@ -138,57 +207,57 @@ function getConstructionFailureMessage(result: Awaited<ReturnType<typeof evaluat
   return [result.startDetail, ...blockingChecks.map((check) => check.detail)].join(" ");
 }
 
-async function printHabitatStatus(registration: KeplerRegistration | null) {
-  const simulationState = await readSimulationState();
-  const existingModuleCount = await countModules();
+function printHabitatStatus(status: HabitatStatusResponse) {
   console.log("Habitat Status");
-  console.log(`Current Tick: ${simulationState.currentTick}`);
+  console.log(`Current Tick: ${status.currentTick}`);
+  console.log(`Module Count: ${status.moduleCount}`);
 
-  if (!registration) {
+  if (!status.registration) {
     console.log("Registration: Not registered");
-    console.log(`Modules: ${existingModuleCount}`);
+    console.log('Try: habitat register --name "Apollo 2.0"');
     return;
   }
 
-  await ensureLocalModulesFromRegistration(registration);
-  const moduleCount = await countModules();
-
-  console.log(`Registration: ${registration.status}`);
-  console.log(`Registered Name: ${registration.habitatName}`);
-  console.log(`Registered At: ${registration.registeredAt}`);
-  console.log(`Registration ID: ${registration.registrationId ?? "Unknown"}`);
-  console.log(`Habitat ID: ${registration.habitatId ?? "Unknown"}`);
-  console.log(`Modules: ${moduleCount}`);
+  console.log(`Registration: Registered as "${status.registration.displayName}"`);
+  console.log(`Registration Status: ${status.registration.status}`);
+  console.log(`Registered At: ${status.registration.registeredAt}`);
+  console.log(`Habitat ID: ${status.registration.habitatId ?? "Unknown"}`);
 }
 
 async function showLocalModuleById(id: string) {
-  const registration = await readRegistration();
-  await ensureLocalModulesFromRegistration(registration);
-  const module = await getModule(id);
+  try {
+    const module = await readRemoteModule(id);
 
-  if (!module) {
-    console.error(`No module with ID or short name "${id}" was found.`);
+    if (!module) {
+      console.error(`No module with ID or short name "${id}" was found.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const activeJob = await findActiveJobByFacility(module.slug);
+    console.log(formatModuleInfo(module, activeJob));
+  } catch (error) {
+    console.error(getApiErrorMessage(error, `No module with ID or short name "${id}" was found.`));
     process.exitCode = 1;
-    return;
   }
-
-  const activeJob = await findActiveJobByFacility(module.slug);
-  console.log(formatModuleInfo(module, activeJob));
 }
 
 async function showLocalModuleStatusById(id: string) {
-  const registration = await readRegistration();
-  await ensureLocalModulesFromRegistration(registration);
-  const module = await getModule(id);
+  try {
+    const module = await readRemoteModule(id);
 
-  if (!module) {
-    console.error(`No module with ID or short name "${id}" was found.`);
+    if (!module) {
+      console.error(`No module with ID or short name "${id}" was found.`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const activeJob = await findActiveJobByFacility(module.slug);
+    console.log(formatModuleStatusDetails(module, activeJob));
+  } catch (error) {
+    console.error(getApiErrorMessage(error, `No module with ID or short name "${id}" was found.`));
     process.exitCode = 1;
-    return;
   }
-
-  const activeJob = await findActiveJobByFacility(module.slug);
-  console.log(formatModuleStatusDetails(module, activeJob));
 }
 
 export async function runHabitat(argv: string[]) {
@@ -214,7 +283,7 @@ export async function runHabitat(argv: string[]) {
 
   program
     .name("habitat")
-    .description("Register this habitat with Kepler and inspect habitat status.")
+    .description("Register this habitat through the backend and inspect habitat status.")
     .version("0.1.0")
     .showHelpAfterError();
 
@@ -222,9 +291,9 @@ export async function runHabitat(argv: string[]) {
     "beforeAll",
     `
 Habitat CLI for this lab:
-  register    Register this habitat with Kepler
+  register    Register this habitat through the backend
   status      Show habitat status
-  unregister  Remove this habitat registration from Kepler
+  unregister  Remove this habitat registration through the backend
   tick        Advance the habitat simulation and drain battery power
   blueprint   Read the Kepler blueprint catalog
   resource    Read the Kepler resource catalog
@@ -262,9 +331,10 @@ Quick start:
   habitat solar status
   habitat unregister
 
-Required environment variables:
-  KEPLER_BASE_URL
-  KEPLER_PLANET_TOKEN
+Environment:
+  HABITAT_API_BASE_URL  Optional, defaults to http://localhost:8787
+  KEPLER_BASE_URL       Needed for Kepler-backed catalog and simulation commands
+  KEPLER_PLANET_TOKEN   Needed for Kepler-backed catalog and simulation commands
 `,
   );
 
@@ -274,13 +344,20 @@ Required environment variables:
 
   program
     .command("register")
-    .description("Register this habitat with Kepler.")
+    .description("Register this habitat.")
     .requiredOption("--name <name>", "habitat name to register")
     .action(async (options) => {
       try {
-        const registration = await registerHabitat(options.name);
-        console.log(`Registered habitat "${registration.habitatName}" with Kepler.`);
-        await printHabitatStatus(registration);
+        const registrationResponse = await postHabitatApiJson<HabitatRegistrationResponse>("/registration", {
+          displayName: options.name,
+        });
+        if (!registrationResponse.registration) {
+          throw new Error("The backend did not return a registration.");
+        }
+
+        const status = await getHabitatApiJson<HabitatStatusResponse>("/status");
+        console.log(`Registered habitat "${status.registration?.displayName ?? options.name}".`);
+        printHabitatStatus(status);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unable to register habitat.";
@@ -293,8 +370,14 @@ Required environment variables:
     .command("status")
     .description("Show habitat status.")
     .action(async () => {
-      const registration = await readRegistration();
-      await printHabitatStatus(registration);
+      try {
+        const status = await getHabitatApiJson<HabitatStatusResponse>("/status");
+        printHabitatStatus(status);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to show habitat status.";
+        console.error(message);
+        process.exitCode = 1;
+      }
     });
 
   program
@@ -340,17 +423,17 @@ Required environment variables:
 
   program
     .command("unregister")
-    .description("Remove this habitat registration from Kepler.")
+    .description("Remove this habitat registration.")
     .action(async () => {
       try {
-        const removed = await unregisterHabitat();
+        const removed = await deleteHabitatApiJson<HabitatUnregisterResponse>("/registration");
 
-        if (!removed) {
+        if (!removed.removed) {
           console.log("This habitat is not currently registered.");
           return;
         }
 
-        console.log("Removed habitat registration from Kepler.");
+        console.log("Removed habitat registration. The habitat is now ready to register again.");
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unable to unregister habitat.";
@@ -365,11 +448,11 @@ Required environment variables:
 
   const blueprintCommand = program
     .command("blueprint")
-    .description("Read the official Kepler blueprint catalog.");
+    .description("Read the blueprint catalog through the backend.");
 
   const resourceCommand = program
     .command("resource")
-    .description("Read the official Kepler resource catalog.");
+    .description("Read the resource catalog through the backend.");
 
   const inventoryCommand = program
     .command("inventory")
@@ -393,14 +476,15 @@ Required environment variables:
 
   const solarCommand = program
     .command("solar")
-    .description("Inspect solar irradiance status.");
+    .description("Inspect solar irradiance through the backend.");
 
   blueprintCommand
     .command("list")
-    .description("List official Kepler blueprint catalog entries.")
+    .description("List blueprint catalog entries through the backend.")
     .action(async () => {
       try {
-        const blueprints = await listBlueprintCatalog();
+        const response = await getHabitatApiJson<HabitatBlueprintListResponse>("/catalog/blueprints");
+        const blueprints = response.blueprints as KeplerBlueprint[];
 
         if (blueprints.length === 0) {
           console.log("No Kepler blueprint catalog entries were returned.");
@@ -410,7 +494,7 @@ Required environment variables:
         console.log("Kepler Blueprint Catalog");
         console.log(formatBlueprintList(blueprints));
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unable to list Kepler blueprints.";
+        const message = error instanceof Error ? error.message : "Unable to list blueprint catalog entries.";
         console.error(message);
         process.exitCode = 1;
       }
@@ -418,20 +502,17 @@ Required environment variables:
 
   blueprintCommand
     .command("show")
-    .description("Show one official Kepler blueprint catalog entry.")
+    .description("Show one blueprint catalog entry through the backend.")
     .argument("<blueprint-id...>", "blueprint ID or display name")
     .action(async (blueprintIdParts: string[]) => {
       try {
         const blueprintId = blueprintIdParts.join(" ");
-        const blueprint = await showBlueprintCatalogEntry(blueprintId);
-        printBlueprint(blueprint);
+        const response = await getHabitatApiJson<HabitatBlueprintResponse>(
+          `/catalog/blueprints/${encodeURIComponent(blueprintId)}`,
+        );
+        printBlueprint(response.blueprint as KeplerBlueprint);
       } catch (error) {
-        const message =
-          error instanceof KeplerBlueprintNotFoundError
-            ? error.message
-            : error instanceof Error
-              ? error.message
-              : "Unable to show Kepler blueprint.";
+        const message = getApiErrorMessage(error, "Unable to show blueprint.");
         console.error(message);
         process.exitCode = 1;
       }
@@ -439,10 +520,11 @@ Required environment variables:
 
   resourceCommand
     .command("list")
-    .description("List official Kepler resource catalog entries.")
+    .description("List resource catalog entries through the backend.")
     .action(async () => {
       try {
-        const resources = await listResourceCatalog();
+        const response = await getHabitatApiJson<HabitatResourceListResponse>("/catalog/resources");
+        const resources = response.resources as KeplerResource[];
 
         if (resources.length === 0) {
           console.log("No Kepler resource catalog entries were returned.");
@@ -452,7 +534,7 @@ Required environment variables:
         console.log("Kepler Resource Catalog");
         console.log(formatResourceList(resources));
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unable to list Kepler resources.";
+        const message = error instanceof Error ? error.message : "Unable to list resource catalog entries.";
         console.error(message);
         process.exitCode = 1;
       }
@@ -462,17 +544,23 @@ Required environment variables:
     .command("list")
     .description("List local habitat inventory.")
     .action(async () => {
-      const items = await listInventoryItems();
+      try {
+        const items = await readRemoteInventoryItems();
 
-      if (items.length === 0) {
-        console.log("No local inventory recorded.");
-        return;
-      }
+        if (items.length === 0) {
+          console.log("No local inventory recorded.");
+          return;
+        }
 
-      console.log("Local Inventory");
+        console.log("Local Inventory");
 
-      for (const item of items) {
-        console.log(`${item.resourceType} | ${item.displayName} | ${formatNumber(item.quantity)} ${item.unit}`);
+        for (const item of items) {
+          console.log(`${item.resourceType} | ${item.displayName} | ${formatNumber(item.quantity)} ${item.unit}`);
+        }
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to read inventory.");
+        console.error(message);
+        process.exitCode = 1;
       }
     });
 
@@ -490,8 +578,38 @@ Required environment variables:
         return;
       }
 
-      await addInventoryItem(resourceType, quantity);
-      console.log(`Added ${formatNumber(quantity)} of "${resourceType}" to local inventory.`);
+      try {
+        await addRemoteInventoryItem(resourceType, quantity);
+        console.log(`Added ${formatNumber(quantity)} of "${resourceType}" to local inventory.`);
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to add inventory item.");
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  inventoryCommand
+    .command("remove")
+    .description("Remove one local inventory resource amount.")
+    .argument("<resource-type>", "resource type")
+    .argument("<quantity>", "resource quantity")
+    .action(async (resourceType, quantityArg) => {
+      const quantity = Number(quantityArg);
+
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        console.error("Quantity must be a positive number.");
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        await removeRemoteInventoryItem(resourceType, quantity);
+        console.log(`Removed ${formatNumber(quantity)} of "${resourceType}" from local inventory.`);
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to remove inventory item.");
+        console.error(message);
+        process.exitCode = 1;
+      }
     });
 
   constructionCommand
@@ -568,7 +686,6 @@ Required environment variables:
         }
 
         const simulationState = await readSimulationState();
-        await spendInventoryResources(result.blueprint.inputs as Record<string, number>);
         const job = {
           id: crypto.randomUUID(),
           blueprintId: result.blueprint.blueprintId,
@@ -592,6 +709,9 @@ Required environment variables:
           capabilities: result.blueprint.capabilities,
           status: "active" as const,
         };
+        await postHabitatApiJson<HabitatInventoryStateResponse>("/inventory/spend", {
+          required: result.blueprint.inputs,
+        });
         await createConstructionJob(job);
         console.log("Started Construction Job");
         console.log(`Job ID: ${job.id}`);
@@ -648,10 +768,11 @@ Required environment variables:
 
   solarCommand
     .command("status")
-    .description("Show solar irradiance status from Kepler.")
+    .description("Show solar irradiance status through the backend.")
     .action(async () => {
       try {
-        const reading = await readSolarIrradianceReading();
+        const response = await getHabitatApiJson<HabitatSolarIrradianceResponse>("/solar/irradiance");
+        const reading = response.solarIrradiance as SolarIrradianceReading | null;
 
         if (!reading) {
           console.error("No usable solar irradiance was returned by Kepler.");
@@ -676,7 +797,7 @@ Required environment variables:
     .option("--status <status>", "initial runtime status", "idle")
     .action(async (id, options) => {
       try {
-        const module = await createModule({
+        const createdModule = await createRemoteModule({
           id,
           slug: id,
           blueprintId: options.blueprintId,
@@ -688,8 +809,11 @@ Required environment variables:
           },
           capabilities: [],
         });
-        console.log(`Created module "${module.slug}".`);
-        printModule(module);
+        if (!createdModule) {
+          throw new Error("The backend did not create a module.");
+        }
+        console.log(`Created module "${createdModule.slug}".`);
+        printModule(createdModule);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to create module.";
         console.error(message);
@@ -701,34 +825,42 @@ Required environment variables:
     .command("list")
     .description("List local habitat modules.")
     .action(async () => {
-      const registration = await readRegistration();
-      await ensureLocalModulesFromRegistration(registration);
-      const modules = await listModules();
+      try {
+        const modules = await readRemoteModules();
 
-      if (modules.length === 0) {
-        console.log("No local habitat modules found.");
-        return;
+        if (modules.length === 0) {
+          console.log("No local habitat modules found.");
+          return;
+        }
+
+        console.log("Local Modules");
+        console.log(formatModuleListReport(modules));
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to list modules.");
+        console.error(message);
+        process.exitCode = 1;
       }
-
-      console.log("Local Modules");
-      console.log(formatModuleListReport(modules));
     });
 
   moduleCommand
     .command("status")
     .description("Show local habitat module status and power draw.")
     .action(async () => {
-      const registration = await readRegistration();
-      await ensureLocalModulesFromRegistration(registration);
-      const modules = await listModules();
+      try {
+        const modules = await readRemoteModules();
 
-      if (modules.length === 0) {
-        console.log("No local habitat modules found.");
-        return;
+        if (modules.length === 0) {
+          console.log("No local habitat modules found.");
+          return;
+        }
+
+        console.log("Module Status");
+        console.log(formatModuleStatusReport(modules));
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to read module status.");
+        console.error(message);
+        process.exitCode = 1;
       }
-
-      console.log("Module Status");
-      console.log(formatModuleStatusReport(modules));
     });
 
   moduleCommand
@@ -743,16 +875,22 @@ Required environment variables:
         return;
       }
 
-      const updatedModule = await updateModule(id, { status });
+      try {
+        const updatedModule = await updateRemoteModule(id, { status });
 
-      if (!updatedModule) {
-        console.error(`No module with ID or short name "${id}" was found.`);
+        if (!updatedModule) {
+          console.error(`No module with ID or short name "${id}" was found.`);
+          process.exitCode = 1;
+          return;
+        }
+
+        console.log(`Set module "${updatedModule.slug}" status to ${status}.`);
+        console.log(`Current Power Draw: ${formatNumber(getModulePowerDrawKw(updatedModule))} kW`);
+      } catch (error) {
+        const message = getApiErrorMessage(error, `No module with ID or short name "${id}" was found.`);
+        console.error(message);
         process.exitCode = 1;
-        return;
       }
-
-      console.log(`Set module "${updatedModule.slug}" status to ${status}.`);
-      console.log(`Current Power Draw: ${formatNumber(getModulePowerDrawKw(updatedModule))} kW`);
     });
 
   moduleCommand
@@ -780,21 +918,27 @@ Required environment variables:
     .option("--status <status>", "new runtime status")
     .option("--condition <condition>", "new runtime condition", (value) => Number.parseInt(value, 10))
     .action(async (id, options) => {
-      const updatedModule = await updateModule(id, {
-        blueprintId: options.blueprintId,
-        displayName: options.displayName,
-        status: options.status,
-        condition: options.condition,
-      });
+      try {
+        const updatedModule = await updateRemoteModule(id, {
+          blueprintId: options.blueprintId,
+          displayName: options.displayName,
+          status: options.status,
+          condition: options.condition,
+        });
 
-      if (!updatedModule) {
-        console.error(`No module with ID or short name "${id}" was found.`);
+        if (!updatedModule) {
+          console.error(`No module with ID or short name "${id}" was found.`);
+          process.exitCode = 1;
+          return;
+        }
+
+        console.log(`Updated module "${updatedModule.slug}".`);
+        printModule(updatedModule);
+      } catch (error) {
+        const message = getApiErrorMessage(error, `No module with ID or short name "${id}" was found.`);
+        console.error(message);
         process.exitCode = 1;
-        return;
       }
-
-      console.log(`Updated module "${updatedModule.slug}".`);
-      printModule(updatedModule);
     });
 
   moduleCommand
@@ -802,15 +946,21 @@ Required environment variables:
     .description("Delete one local habitat module.")
     .argument("<id>", "module ID")
     .action(async (id) => {
-      const deleted = await deleteModule(id);
+      try {
+        const deleted = await deleteRemoteModule(id);
 
-      if (!deleted) {
-        console.error(`No module with ID or short name "${id}" was found.`);
+        if (!deleted) {
+          console.error(`No module with ID or short name "${id}" was found.`);
+          process.exitCode = 1;
+          return;
+        }
+
+        console.log(`Deleted module "${id}".`);
+      } catch (error) {
+        const message = getApiErrorMessage(error, `No module with ID or short name "${id}" was found.`);
+        console.error(message);
         process.exitCode = 1;
-        return;
       }
-
-      console.log(`Deleted module "${id}".`);
     });
 
   program.on("command:*", () => {

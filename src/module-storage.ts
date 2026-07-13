@@ -1,3 +1,4 @@
+import { getHabitatApiJson, putHabitatApiJson } from "./habitat-api-client";
 import { getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { HabitatModule, HabitatModuleState } from "./types";
 
@@ -99,42 +100,63 @@ function writeModuleStateBlob(state: HabitatModuleState) {
   writeStateBlob(MODULES_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+function shouldUseLocalModuleStorage() {
+  return process.env.HABITAT_BACKEND_RUNTIME === "1" || !process.env.HABITAT_API_BASE_URL?.trim();
+}
+
+async function readModuleStateRemote(): Promise<HabitatModuleState> {
+  return await getHabitatApiJson<HabitatModuleState>("/modules");
+}
+
+async function writeModuleStateRemote(state: HabitatModuleState) {
+  return await putHabitatApiJson<HabitatModuleState>("/modules", state);
+}
+
 export function getModulesFilePath() {
   return getSqliteDatabaseFilePath();
 }
 
 export async function readModuleState(): Promise<HabitatModuleState> {
-  return readModuleStateBlob();
+  if (shouldUseLocalModuleStorage()) {
+    return readModuleStateBlob();
+  }
+
+  return await readModuleStateRemote();
 }
 
 export async function writeModuleState(state: HabitatModuleState) {
-  writeModuleStateBlob(state);
+  if (shouldUseLocalModuleStorage()) {
+    writeModuleStateBlob(state);
+    return;
+  }
+
+  await writeModuleStateRemote(state);
 }
 
 export async function hydrateModules(habitatId: string | null, modules: HabitatModule[]) {
-  writeModuleStateBlob({
+  await writeModuleState({
     habitatId,
     modules,
   });
 }
 
 export async function listModules() {
-  const state = readModuleStateBlob();
+  const state = await readModuleState();
   return state.modules;
 }
 
 export async function countModules() {
-  const state = readModuleStateBlob();
+  const state = await readModuleState();
   return state.modules.length;
 }
 
 export async function getModule(moduleId: string) {
-  const state = readModuleStateBlob();
+  const state = await readModuleState();
   return state.modules.find((module) => module.id === moduleId || module.slug === moduleId) ?? null;
 }
 
 export async function createModule(module: HabitatModule) {
-  const state = readModuleStateBlob();
+  const state = await readModuleState();
   const normalizedModule = {
     ...module,
     slug: module.slug || module.id,
@@ -150,7 +172,7 @@ export async function createModule(module: HabitatModule) {
   }
 
   state.modules.push(normalizedModule);
-  writeModuleStateBlob(state);
+  await writeModuleState(state);
   return normalizedModule;
 }
 
@@ -158,7 +180,7 @@ export async function updateModule(
   moduleId: string,
   updates: Partial<Pick<HabitatModule, "blueprintId" | "displayName">> & { status?: string; condition?: number },
 ) {
-  const state = readModuleStateBlob();
+  const state = await readModuleState();
   const module = state.modules.find(
     (existingModule) => existingModule.id === moduleId || existingModule.slug === moduleId,
   );
@@ -189,12 +211,12 @@ export async function updateModule(
     };
   }
 
-  writeModuleStateBlob(state);
+  await writeModuleState(state);
   return module;
 }
 
 export async function deleteModule(moduleId: string) {
-  const state = readModuleStateBlob();
+  const state = await readModuleState();
   const nextModules = state.modules.filter(
     (module) => module.id !== moduleId && module.slug !== moduleId,
   );
@@ -203,7 +225,7 @@ export async function deleteModule(moduleId: string) {
     return false;
   }
 
-  writeModuleStateBlob({
+  await writeModuleState({
     ...state,
     modules: nextModules,
   });

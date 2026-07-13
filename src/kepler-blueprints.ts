@@ -1,3 +1,5 @@
+import { logKeplerRequest } from "./kepler-logging";
+
 type KeplerConfig = {
   baseUrl: string;
   planetToken: string;
@@ -162,11 +164,13 @@ async function sendCatalogRequest(pathname: string) {
       },
     });
   } catch (error) {
+    logKeplerRequest("GET", pathname, "network error");
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Unable to reach Kepler at ${requestUrl}: ${message}`);
   }
 
   const responseBody = await parseJsonResponse(response);
+  logKeplerRequest("GET", pathname, response.status);
 
   if (!response.ok) {
     if (response.status === 404) {

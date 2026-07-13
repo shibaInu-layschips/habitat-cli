@@ -30,3 +30,6 @@ habitat tick 180
 habitat module show small-solar-array-1
 habitat solar status
 habitat tick 1 hour
+
+codex changed:
+added solar panel integration and solar radiance

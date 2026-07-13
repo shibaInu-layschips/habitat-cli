@@ -8,10 +8,12 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "server": "bun src/server.ts"
   },
   "dependencies": {
-    "commander": "^14.0.0"
+    "commander": "^14.0.0",
+    "hono": "^4.12.29"
   },
   "devDependencies": {
     "@types/bun": "^1.2.20",

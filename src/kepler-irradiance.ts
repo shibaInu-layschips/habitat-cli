@@ -1,3 +1,5 @@
+import { logKeplerRequest } from "./kepler-logging";
+
 type KeplerConfig = {
   baseUrl: string;
   planetToken: string;
@@ -84,9 +86,11 @@ async function sendWorldRequest(pathname: string) {
       },
     });
   } catch {
+    logKeplerRequest("GET", pathname, "network error");
     return null;
   }
 
+  logKeplerRequest("GET", pathname, response.status);
   if (!response.ok) {
     return null;
   }
