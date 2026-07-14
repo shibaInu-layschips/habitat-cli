@@ -1,4 +1,5 @@
 .env
 .env.save
+habitat.sqlite
 .habitat/
 node_modules/

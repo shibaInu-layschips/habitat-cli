@@ -1,0 +1,35 @@
+Why is SQLite a better fit than adding more JSON files?
+project has multiple pieces of local state that need to stay in sync: registration, identity, modules, inventory, construction jobs, and tick state. JSON files made that spread out across several paths, which is easier to desync and harder to reason about. SQLite gives you one local source of truth, atomic updates, and fewer chances for a partial write to leave the CLI in a weird state.
+
+Why should this project use Bun SQLite?
+Bun SQLite is a good fit because this is already a Bun CLI. There’s no extra runtime dependency, no separate database service, and the API is available right in the same stack the project already uses. That keeps the implementation small, portable, and easy to run from the terminal.
+
+What local state did you choose to move or prepare for SQLite first?
+I moved or prepared the student-side local state first:
+registration
+identity
+modules
+inventory
+construction jobs
+simulation tick state
+
+What state did you intentionally leave alone?
+I intentionally left Kepler-owned state alone:
+registration and catalog data as an API concern
+blueprints
+unlocks
+stream URLs
+replay URLs
+shared world state
+
+How did you prove the CLI was not silently falling back to JSON files?
+I added a test in tests/sqlite-storage.test.ts that writes real state and then checks for .habitat/habitat.sqlite while asserting the old JSON files are not created in the active path.
+I removed the active-path JSON reads/writes from the storage modules and then verified the codebase still passed a grep sweep for those old active-path filenames.
+
+How did you verify that existing CLI behavior still works?
+I verified the existing CLI still works by running:
+bun run check
+bun test
+
+What would be the next persistence improvement after this lab?
+normalize the SQLite schema instead of storing JSON blobs in a single table.

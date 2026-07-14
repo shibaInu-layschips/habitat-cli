@@ -12,7 +12,6 @@ export function startHabitatApiServer(
   fetch: any,
   hostname: string,
   port: number,
-  logger: Pick<typeof console, "log"> = console,
   serve: ServeLike = Bun.serve,
 ) {
   try {
@@ -26,12 +25,8 @@ export function startHabitatApiServer(
       throw error;
     }
 
-    logger.log(`Port ${port} is already in use. Starting on an available port instead.`);
-
-    return serve({
-      fetch,
-      hostname,
-      port: 0,
-    });
+    throw new Error(
+      `Port ${port} is already in use. Stop the existing server or set HABITAT_API_PORT to a different port.`,
+    );
   }
 }

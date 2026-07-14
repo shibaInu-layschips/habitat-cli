@@ -1,0 +1,61 @@
+Your public GitHub repository URL for the updated Habitat CLI:
+https://github.com/shibaInu-layschips/habitat-cli.git
+
+A short terminal video or walkthrough showing bun run server:
+Run this in the class-server terminal:
+HABITAT_API_HOST=0.0.0.0 HABITAT_API_PORT=18787 bun run server
+
+A short terminal video or walkthrough showing the CLI using HABITAT_API_BASE_URL:
+Run this in your client terminal:
+HABITAT_API_BASE_URL=http://100.64.12.34:18787 bun src/index.ts status
+
+A short terminal video or walkthrough showing curl /registration:
+Run this from your client terminal:
+curl http://100.x.y.z:18787/registration
+
+Evidence from ss -ltnp that the deployed backend listens on 0.0.0.0:
+Run this in a class-server terminal:
+ss -ltnp | grep 18787
+If ss is unavailable, use:
+lsof -nP -iTCP:18787 -sTCP:LISTEN
+You should see something like:
+0.0.0.0:18787
+
+A short terminal video or walkthrough showing a laptop request to the backend through the class server’s Tailscale IP address:
+From your laptop terminal, run:
+curl http://100.x.y.z:18787/registration
+Replace 100.x.y.z with the class server’s Tailscale IP.
+
+A brief explanation of the difference between localhost, 0.0.0.0, and the Tailscale address used in a client URL:
+localhost means the same machine only.
+0.0.0.0 means the server listens on all network interfaces.
+The Tailscale address like 100.x.y.z is the private client URL your laptop uses to reach the class server over Tailscale.
+
+A short terminal video or screenshot showing server logs for at least one CLI command:
+Example log:
+[habitat-api] GET /registration -> not registered
+
+A short terminal video or screenshot showing a [kepler] log line for one Kepler-backed command:
+Example logs:
+[habitat-api] GET /catalog/blueprints -> proxied to Kepler
+[kepler] GET /catalog/blueprints -> 200
+
+A brief written summary of the three design decisions:
+Full proxy API: the backend owns SQLite and all Kepler calls, while the CLI stays focused on user-friendly terminal output.
+Separate server command: the backend runs as its own bun run server process instead of being hidden inside the CLI.
+Resource-shaped REST routes: the backend exposes real resources like /registration, /modules, /inventory, /catalog/blueprints, and /solar/irradiance instead of mirroring Commander commands.
+
+A brief written summary of which responsibilities now belong to the CLI and which belong to the Hono backend:
+CLI responsibilities: argument parsing, friendly messages, table formatting, and command-level validation.
+Hono backend responsibilities: SQLite persistence, registration state, module/inventory state, and Kepler proxy calls.
+
+A brief note explaining why the logs are sanitized:
+They only print route, method, status, and a short summary.
+They do not print bearer tokens, API tokens, or full request/response bodies.
+
+Evidence that the CLI, direct HTTP request, and server-log workflow all work as expected:
+- bun run server starts the backend
+- ss -ltnp shows the backend listening on 0.0.0.0:18787 on the class server
+- curl http://100.x.y.z:18787/registration returns JSON
+- HABITAT_API_BASE_URL=http://100.x.y.z:18787 bun src/index.ts status proves the CLI talks to the backend
+- bun src/index.ts blueprint list proves the backend also calls Kepler and logs [kepler] ...

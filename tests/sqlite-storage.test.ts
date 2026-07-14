@@ -101,7 +101,7 @@ describe("sqlite storage", () => {
     expect(moduleState.modules).toHaveLength(1);
     expect(moduleState.modules[0]?.slug).toBe("command-module-1");
 
-    const dbPath = join(workspaceDir, ".habitat", "habitat.sqlite");
+    const dbPath = join(workspaceDir, "habitat.sqlite");
     expect(existsSync(dbPath)).toBe(true);
     expect(existsSync(join(workspaceDir, ".habitat", "registration.json"))).toBe(false);
     expect(existsSync(join(workspaceDir, ".habitat", "identity.json"))).toBe(false);

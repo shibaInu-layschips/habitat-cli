@@ -9,7 +9,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "bun test",
-    "server": "bun src/server.ts"
+    "server": "bun src/server.ts",
+    "night-watch": "bun lxc-night-watch/run.ts"
   },
   "dependencies": {
     "commander": "^14.0.0",

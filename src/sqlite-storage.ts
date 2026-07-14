@@ -9,7 +9,7 @@ type DatabaseEntry = {
 const databaseCache = new Map<string, DatabaseEntry>();
 
 export function getSqliteDatabaseFilePath() {
-  return join(process.cwd(), ".habitat", "habitat.sqlite");
+  return join(process.cwd(), "habitat.sqlite");
 }
 
 function ensureDatabaseDirectory() {
