@@ -26,6 +26,7 @@ import {
 } from "./kepler-registration";
 import { listResourceCatalog } from "./kepler-resources";
 import { readSolarIrradianceReading } from "./kepler-irradiance";
+import { readWorldScan } from "./kepler-world-scan";
 import { readSimulationState } from "./power-simulation";
 
 export const app = new Hono();
@@ -39,6 +40,15 @@ function setHabitatApiSummary(c: object, summary: string) {
 function respondJson(c: any, body: unknown, summary: string, status = 200) {
   setHabitatApiSummary(c, summary);
   return c.json(body, status);
+}
+
+function parseIntegerQuery(value: string | undefined) {
+  if (typeof value !== "string" || !/^-?\d+$/.test(value.trim())) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 app.use("*", async (c, next) => {
@@ -369,6 +379,46 @@ app.get("/catalog/resources", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to list catalog resources.";
     return respondJson(c, { error: message }, "Kepler catalog lookup failed", 502);
+  }
+});
+
+app.get("/world/scan", async (c) => {
+  const x = parseIntegerQuery(c.req.query("x"));
+  const y = parseIntegerQuery(c.req.query("y"));
+  const sensorStrength = parseIntegerQuery(c.req.query("sensorStrength"));
+  const radius = parseIntegerQuery(c.req.query("radius"));
+
+  if (
+    x === null ||
+    y === null ||
+    sensorStrength === null ||
+    sensorStrength < 0 ||
+    sensorStrength > 100 ||
+    radius === null ||
+    radius < 0 ||
+    radius > 5
+  ) {
+    return respondJson(c, { error: "x, y, sensorStrength, and radius must be valid numbers." }, "world scan query invalid", 400);
+  }
+
+  const registration = await readRegistration();
+
+  if (!registration?.habitatId) {
+    return respondJson(c, { error: "This habitat must be registered before scanning the world." }, "world scan unavailable", 409);
+  }
+
+  try {
+    const scan = await readWorldScan({
+      habitatId: registration.habitatId,
+      x,
+      y,
+      sensorStrength,
+      radius,
+    });
+    return respondJson(c, scan, "proxied to Kepler");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to scan the world.";
+    return respondJson(c, { error: message }, "Kepler world scan failed", 502);
   }
 });
 

@@ -541,6 +541,99 @@ describe("state api", () => {
     expect(logs.join("\n")).toContain("[kepler] GET /world/solar-irradiance -> 200");
   });
 
+  test("proxies world scan reads through the backend and injects habitatId", async () => {
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    };
+
+    globalThis.fetch = async (input, init) => {
+      const requestUrl = new URL(String(input));
+
+      if (requestUrl.toString() === "https://planet.turingguild.com/habitats/register") {
+        return new Response(
+          JSON.stringify({
+            registrationId: "registration-1",
+            habitatId: "habitat-1",
+            status: "registered",
+            unregisterUrl: "https://planet.turingguild.com/habitats/register/registration-1",
+            starterModules: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (requestUrl.origin === "https://planet.turingguild.com" && requestUrl.pathname === "/world/scan") {
+        expect(init?.method).toBe("GET");
+        expect(requestUrl.searchParams.get("x")).toBe("12");
+        expect(requestUrl.searchParams.get("y")).toBe("34");
+        expect(requestUrl.searchParams.get("sensorStrength")).toBe("5");
+        expect(requestUrl.searchParams.get("radiusTiles")).toBe("4");
+        expect(requestUrl.searchParams.get("habitatId")).toBe("habitat-1");
+
+        return new Response(
+          JSON.stringify({
+            scan: {
+              resources: [
+                {
+                  resourceType: "ferrite",
+                  quantity: 12,
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${requestUrl.toString()} ${init?.method ?? "GET"}`);
+    };
+
+    await app.fetch(
+      new Request("http://localhost/registration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: "Apollo" }),
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/world/scan?x=12&y=34&sensorStrength=5&radius=4"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      scan: {
+        resources: [
+          {
+            resourceType: "ferrite",
+            quantity: 12,
+          },
+        ],
+      },
+    });
+    expect(logs.join("\n")).toContain("[habitat-api] GET /world/scan -> proxied to Kepler");
+    expect(logs.join("\n")).toContain("[kepler] GET /world/scan -> 200");
+  });
+
+  test("validates world scan query parameters before calling Kepler", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = async () => {
+      fetchCalls += 1;
+      throw new Error("Unexpected network call");
+    };
+
+    const response = await app.fetch(
+      new Request("http://localhost/world/scan?x=12&y=nope&sensorStrength=0&radius="),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "x, y, sensorStrength, and radius must be valid numbers.",
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
   test("logs each request", async () => {
     const logs: string[] = [];
     console.log = (...args: unknown[]) => {

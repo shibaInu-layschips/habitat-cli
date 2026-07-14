@@ -276,7 +276,10 @@ function createApiAwareFetch(handler: typeof globalThis.fetch) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
 
-    if (url.startsWith("http://localhost:8787/modules") || url.startsWith("http://localhost:8787/inventory")) {
+    if (
+      url.startsWith("http://localhost:8787/modules") ||
+      url.startsWith("http://localhost:8787/inventory")
+    ) {
       return await apiFetchRouter(input, init);
     }
 
@@ -1775,6 +1778,154 @@ describe("habitat CLI", () => {
     expect(joinedOutput).toContain("Condition: 92");
     expect(joinedOutput).toContain("Current Power Draw: 1.25 kW");
     expect(joinedOutput).toContain("Capabilities: fabrication");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows one-tile scan details through the local habitat api", async () => {
+    globalThis.fetch = createApiAwareFetch(async (input, init) => {
+      expect(String(input)).toBe("http://localhost:8787/world/scan?x=3&y=-2&sensorStrength=60&radius=0");
+      expect(init?.method).toBe("GET");
+
+      return new Response(
+        JSON.stringify({
+          tiles: [
+            {
+              x: 3,
+              y: -2,
+              distance: 0,
+              terrain: "basalt flats",
+              resources: [
+                {
+                  resourceType: "ferrite",
+                  displayName: "Ferrite",
+                  probability: 0.62,
+                  estimatedQuantity: 18,
+                },
+                {
+                  resourceType: "silicate-glass",
+                  displayName: "Silicate Glass",
+                  probability: 0.28,
+                  estimatedQuantity: 7,
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await runHabitat(["bun", "habitat", "scan", "--x", "3", "--y", "-2", "--strength", "60"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("World Scan");
+    expect(joinedOutput).toContain("Tile: (3, -2)");
+    expect(joinedOutput).toContain("Terrain: basalt flats");
+    expect(joinedOutput).toContain("Ferrite");
+    expect(joinedOutput).toContain("62%");
+    expect(joinedOutput).toContain("18");
+    expect(joinedOutput).toContain("Silicate Glass");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("shows one summary row per tile for a larger-radius scan", async () => {
+    globalThis.fetch = createApiAwareFetch(async (input, init) => {
+      expect(String(input)).toBe("http://localhost:8787/world/scan?x=3&y=-2&sensorStrength=60&radius=2");
+      expect(init?.method).toBe("GET");
+
+      return new Response(
+        JSON.stringify({
+          tiles: [
+            {
+              x: 3,
+              y: -2,
+              distance: 0,
+              terrain: "basalt flats",
+              resources: [
+                {
+                  resourceType: "ferrite",
+                  displayName: "Ferrite",
+                  probability: 0.62,
+                  estimatedQuantity: 18,
+                },
+              ],
+            },
+            {
+              x: 4,
+              y: -2,
+              distance: 1,
+              terrain: "dust plain",
+              resources: [
+                {
+                  resourceType: "silicate-glass",
+                  displayName: "Silicate Glass",
+                  probability: 0.41,
+                  estimatedQuantity: 11,
+                },
+                {
+                  resourceType: "ferrite",
+                  displayName: "Ferrite",
+                  probability: 0.33,
+                  estimatedQuantity: 8,
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    await runHabitat(["bun", "habitat", "scan", "--x", "3", "--y", "-2", "--strength", "60", "--radius", "2"]);
+
+    const joinedOutput = output.join("\n");
+    expect(joinedOutput).toContain("World Scan Summary");
+    expect(joinedOutput).toContain("(3, -2)");
+    expect(joinedOutput).toContain("(4, -2)");
+    expect(joinedOutput).toContain("basalt flats");
+    expect(joinedOutput).toContain("dust plain");
+    expect(joinedOutput).toContain("Ferrite");
+    expect(joinedOutput).toContain("Silicate Glass");
+    expect(joinedOutput).toContain("62%");
+    expect(joinedOutput).toContain("41%");
+    expect(errors).toEqual([]);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  test("prints raw scan json with --json", async () => {
+    const scanResponse = {
+      tiles: [
+        {
+          x: 3,
+          y: -2,
+          distance: 0,
+          terrain: "basalt flats",
+          resources: [
+            {
+              resourceType: "ferrite",
+              displayName: "Ferrite",
+              probability: 0.62,
+              estimatedQuantity: 18,
+            },
+          ],
+        },
+      ],
+    };
+
+    globalThis.fetch = createApiAwareFetch(async (input) => {
+      expect(String(input)).toBe("http://localhost:8787/world/scan?x=3&y=-2&sensorStrength=60&radius=0");
+
+      return new Response(JSON.stringify(scanResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await runHabitat(["bun", "habitat", "scan", "--x", "3", "--y", "-2", "--strength", "60", "--json"]);
+
+    expect(output.join("\n")).toContain(JSON.stringify(scanResponse, null, 2));
     expect(errors).toEqual([]);
     expect(process.exitCode).not.toBe(1);
   });

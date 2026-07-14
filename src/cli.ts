@@ -26,6 +26,7 @@ import { formatResourceList } from "./resource-report";
 import { KeplerBlueprintNotFoundError, showBlueprintCatalogEntry, type KeplerBlueprint } from "./kepler-blueprints";
 import type { KeplerResource } from "./kepler-resources";
 import type { SolarIrradianceReading } from "./kepler-irradiance";
+import { formatWorldScanDetail, formatWorldScanSummary } from "./world-scan-report";
 import { ensureLocalModulesFromRegistration, readRegistration } from "./kepler-registration";
 import {
   getHabitatApiJson,
@@ -147,6 +148,35 @@ function parseTickRequest(ticksArg: string, unitArg?: string) {
   }
 
   return null;
+}
+
+function parseIntegerOption(value: string) {
+  if (!/^-?\d+$/.test(value)) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseSensorStrength(value: string) {
+  const parsed = parseIntegerOption(value);
+
+  if (parsed === null || parsed < 0 || parsed > 100) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function parseScanRadius(value: string) {
+  const parsed = parseIntegerOption(value);
+
+  if (parsed === null || parsed < 0 || parsed > 5) {
+    return null;
+  }
+
+  return parsed;
 }
 
 function printBatteryModule(module: HabitatModule) {
@@ -293,6 +323,7 @@ export async function runHabitat(argv: string[]) {
 Habitat CLI for this lab:
   register    Register this habitat through the backend
   status      Show habitat status
+  scan        Scan nearby world resources through the backend
   unregister  Remove this habitat registration through the backend
   tick        Advance the habitat simulation and drain battery power
   blueprint   Read the Kepler blueprint catalog
@@ -306,7 +337,7 @@ Habitat CLI for this lab:
 
 Persistence:
   Active local student-side state is stored in:
-    .habitat/habitat.sqlite
+    habitat.sqlite
 `,
   );
 
@@ -317,6 +348,7 @@ Quick start:
   habitat --help
   habitat register --name "Apollo 2.0"
   habitat status
+  habitat scan --x 3 --y -2 --strength 60
   habitat blueprint list
   habitat blueprint show basic-battery
   habitat resource list
@@ -375,6 +407,62 @@ Environment:
         printHabitatStatus(status);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to show habitat status.";
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  program
+    .command("scan")
+    .description("Scan nearby world resources through the backend.")
+    .requiredOption("--x <integer>", "current x coordinate")
+    .requiredOption("--y <integer>", "current y coordinate")
+    .requiredOption("--strength <0-100>", "effective sensor strength")
+    .option("--radius <0-5>", "scan radius", "0")
+    .option("--json", "print the complete JSON response")
+    .action(async (options) => {
+      const x = parseIntegerOption(options.x);
+      const y = parseIntegerOption(options.y);
+      const strength = parseSensorStrength(options.strength);
+      const radius = parseScanRadius(options.radius);
+
+      if (x === null) {
+        console.error("x must be an integer.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (y === null) {
+        console.error("y must be an integer.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (strength === null) {
+        console.error("strength must be an integer between 0 and 100.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (radius === null) {
+        console.error("radius must be an integer between 0 and 5.");
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const response = await getHabitatApiJson<unknown>(
+          `/world/scan?x=${encodeURIComponent(String(x))}&y=${encodeURIComponent(String(y))}&sensorStrength=${encodeURIComponent(String(strength))}&radius=${encodeURIComponent(String(radius))}`,
+        );
+
+        if (options.json) {
+          console.log(JSON.stringify(response, null, 2));
+          return;
+        }
+
+        console.log(radius === 0 ? formatWorldScanDetail(response) : formatWorldScanSummary(response));
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to scan the world.");
         console.error(message);
         process.exitCode = 1;
       }
