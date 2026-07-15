@@ -212,8 +212,8 @@ export async function collectExplorer(quantityKg: number) {
     throw new Error("No human is currently deployed.");
   }
 
-  if (!Number.isFinite(quantityKg) || quantityKg <= 0) {
-    throw new Error("Collection quantity must be a positive number of kilograms.");
+  if (!Number.isInteger(quantityKg) || quantityKg <= 0) {
+    throw new Error("Collection quantity must be a positive whole number of kilograms.");
   }
 
   if (!current.habitatId) {

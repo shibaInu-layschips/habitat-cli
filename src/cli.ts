@@ -712,8 +712,8 @@ Environment:
     .action(async (quantityArg) => {
       const quantityKg = Number(quantityArg);
 
-      if (!Number.isFinite(quantityKg) || quantityKg <= 0) {
-        console.error("Quantity must be a positive number of kilograms.");
+      if (!Number.isInteger(quantityKg) || quantityKg <= 0) {
+        console.error("Quantity must be a positive whole number of kilograms.");
         process.exitCode = 1;
         return;
       }

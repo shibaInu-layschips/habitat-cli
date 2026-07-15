@@ -133,5 +133,23 @@ describe("eva state", () => {
     await deployExplorer("human-1");
     await expect(collectExplorer(21)).rejects.toThrow("carrying capacity");
     expect(fetchCalls).toBe(0);
+    await expect(collectExplorer(1.5)).rejects.toThrow("positive whole number");
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("does not change carried resources when Kepler rejects collection", async () => {
+    await deployExplorer("human-1");
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: "not enough material" }), { status: 409 });
+
+    await expect(collectExplorer(5)).rejects.toThrow("Kepler world collection failed");
+    expect((await readEvaState()).carriedResources).toEqual({});
+  });
+
+  test("does not change carried resources when the tile has no material", async () => {
+    await deployExplorer("human-1");
+    globalThis.fetch = async () => new Response(JSON.stringify({ resourceType: null, quantityKg: 0 }), { status: 200 });
+
+    await expect(collectExplorer(5)).rejects.toThrow("invalid collection result");
+    expect((await readEvaState()).carriedResources).toEqual({});
   });
 });

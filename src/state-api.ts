@@ -288,8 +288,8 @@ app.post("/collect", async (c) => {
   const record = requestBody && typeof requestBody === "object" ? (requestBody as Record<string, unknown>) : null;
   const quantityKg = typeof record?.quantityKg === "number" ? record.quantityKg : NaN;
 
-  if (!Number.isFinite(quantityKg) || quantityKg <= 0) {
-    return respondJson(c, { error: "quantityKg must be a positive number." }, "collection request invalid", 400);
+  if (!Number.isInteger(quantityKg) || quantityKg <= 0) {
+    return respondJson(c, { error: "quantityKg must be a positive whole number." }, "collection request invalid", 400);
   }
 
   try {
