@@ -3,6 +3,7 @@ import { hydrateModules, parseStarterModules, readModuleState } from "./module-s
 import { logKeplerRequest } from "./kepler-logging";
 import { deleteStateBlob, getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { AlertContract, HabitatHuman } from "./types";
+import { resetEvaState } from "./eva-state";
 
 export type KeplerRegistration = {
   habitatName: string;
@@ -295,6 +296,7 @@ async function rollbackRegistrationPersistence() {
   clearRegistration();
   await hydrateModules(null, []);
   await hydrateHumans(null, []);
+  await resetEvaState();
 }
 
 function getErrorMessage(error: unknown) {
@@ -532,6 +534,9 @@ export async function unregisterHabitat() {
 
       if (response.ok || response.status === 404) {
         await clearRegistration();
+        await hydrateModules(null, []);
+        await hydrateHumans(null, []);
+        await resetEvaState();
         return true;
       }
 

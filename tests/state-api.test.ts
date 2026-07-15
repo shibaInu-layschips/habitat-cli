@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { app } from "../src/state-api";
 import { hydrateHumans } from "../src/human-storage";
 import { hydrateModules } from "../src/module-storage";
+import { readEvaState } from "../src/eva-state";
 
 let originalCwd = "";
 let workspaceDir = "";
@@ -132,6 +133,65 @@ describe("state api", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: 'Module "module-a" cannot be deleted while humans are inside it.' });
+  });
+
+  test("exposes EVA deploy, move, status, and dock through the local api", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ tiles: [] }), { status: 200 });
+    await hydrateModules("habitat-1", [
+      {
+        id: "suitport-1",
+        slug: "basic-suitport-1",
+        blueprintId: "basic-suitport",
+        displayName: "Basic Suitport",
+        connectedTo: [],
+        runtimeAttributes: { status: "active", maxCarryingCapacityKg: 25 },
+        capabilities: ["suitport-access"],
+      },
+    ]);
+    await hydrateHumans("habitat-1", [
+      { id: "human-1", displayName: "Henry", locationModuleId: "suitport-1" },
+    ]);
+
+    const deployResponse = await app.fetch(
+      new Request("http://localhost/eva/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ humanId: "human-1" }),
+      }),
+    );
+    expect(deployResponse.status).toBe(200);
+
+    const moveResponse = await app.fetch(
+      new Request("http://localhost/eva/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x: 1, y: 0 }),
+      }),
+    );
+    expect(moveResponse.status).toBe(200);
+    expect(await moveResponse.json()).toMatchObject({ eva: { x: 1, y: 0 } });
+
+    const statusResponse = await app.fetch(new Request("http://localhost/eva/status"));
+    expect(statusResponse.status).toBe(200);
+    expect(await statusResponse.json()).toMatchObject({ eva: { deployedHumanId: "human-1", x: 1, y: 0 } });
+
+    const dockResponse = await app.fetch(
+      new Request("http://localhost/eva/dock", { method: "POST" }),
+    );
+    expect(dockResponse.status).toBe(409);
+
+    await app.fetch(
+      new Request("http://localhost/eva/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x: 0, y: 0 }),
+      }),
+    );
+    const dockAtOriginResponse = await app.fetch(
+      new Request("http://localhost/eva/dock", { method: "POST" }),
+    );
+    expect(dockAtOriginResponse.status).toBe(200);
+    expect((await readEvaState()).deployedHumanId).toBeNull();
   });
 
   test("returns a friendly not-found response when no registration exists", async () => {

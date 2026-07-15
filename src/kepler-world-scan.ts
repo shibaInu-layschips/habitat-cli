@@ -5,6 +5,16 @@ type KeplerConfig = {
   planetToken: string;
 };
 
+export class KeplerWorldScanError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "KeplerWorldScanError";
+    this.status = status;
+  }
+}
+
 export type WorldScanRequest = {
   habitatId: string;
   x: number;
@@ -79,8 +89,23 @@ export async function readWorldScan(request: WorldScanRequest) {
   logKeplerRequest("GET", "/world/scan", response.status);
 
   if (!response.ok) {
-    throw new Error(formatResponseError(response.status, response.statusText, responseBody));
+    throw new KeplerWorldScanError(
+      response.status,
+      formatResponseError(response.status, response.statusText, responseBody),
+    );
   }
 
   return responseBody;
+}
+
+export async function assertCoordinateInCurrentKeplerSector(habitatId: string, x: number, y: number) {
+  try {
+    await readWorldScan({ habitatId, x, y, sensorStrength: 0, radius: 0 });
+  } catch (error) {
+    if (error instanceof KeplerWorldScanError && (error.status === 400 || error.status === 422)) {
+      throw new Error(`Coordinate (${x}, ${y}) is outside the current Kepler sector.`);
+    }
+
+    throw error;
+  }
 }

@@ -6,7 +6,7 @@ import { runHabitat } from "../src/cli";
 import { hydrateInventory, readInventoryState } from "../src/inventory-storage";
 import { readConstructionState, writeConstructionState } from "../src/construction-storage";
 import { hydrateModules, readModuleState } from "../src/module-storage";
-import type { HabitatHuman, HabitatModule, HabitatModuleState, InventoryState } from "../src/types";
+import type { EvaState, HabitatHuman, HabitatModule, HabitatModuleState, InventoryState } from "../src/types";
 
 const workshopModule: HabitatModule = {
   id: "module-workshop",
@@ -66,6 +66,7 @@ let errors: string[] = [];
 let apiModuleState: HabitatModuleState;
 let apiInventoryState: InventoryState;
 let apiHumanState: { habitatId: string | null; humans: HabitatHuman[] };
+let apiEvaState: EvaState;
 
 function formatDisplayName(resourceType: string) {
   return resourceType
@@ -84,6 +85,27 @@ async function apiFetchRouter(input: RequestInfo | URL, init?: RequestInit) {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  if (url === "http://localhost:8787/eva/status" && method === "GET") {
+    return new Response(JSON.stringify({ eva: apiEvaState }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
+  if (url === "http://localhost:8787/eva/deploy" && method === "POST") {
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    apiEvaState = { ...apiEvaState, deployedHumanId: body?.humanId ?? null, x: 0, y: 0 };
+    return new Response(JSON.stringify({ eva: apiEvaState }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
+  if (url === "http://localhost:8787/eva/move" && method === "POST") {
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    apiEvaState = { ...apiEvaState, x: body?.x, y: body?.y };
+    return new Response(JSON.stringify({ eva: apiEvaState }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
+  if (url === "http://localhost:8787/eva/dock" && method === "POST") {
+    apiEvaState = { ...apiEvaState, deployedHumanId: null, x: 0, y: 0, carriedResources: {} };
+    return new Response(JSON.stringify({ eva: apiEvaState }), { status: 200, headers: { "Content-Type": "application/json" } });
   }
 
   if (url.startsWith("http://localhost:8787/humans/") && method === "PUT") {
@@ -329,6 +351,14 @@ beforeEach(async () => {
   apiModuleState = { habitatId: null, modules: [] };
   apiInventoryState = { items: [] };
   apiHumanState = { habitatId: null, humans: [] };
+  apiEvaState = {
+    habitatId: "habitat-1",
+    deployedHumanId: null,
+    x: 0,
+    y: 0,
+    carriedResources: {},
+    maxCarryingCapacityKg: 25,
+  };
 
   console.log = (...args: unknown[]) => {
     output.push(args.map(String).join(" "));
@@ -810,6 +840,24 @@ describe("habitat CLI", () => {
     expect(result.errors).toEqual([]);
     expect(result.output).toEqual(["Moved Henry to module-b."]);
     expect(apiHumanState.humans[0]?.locationModuleId).toBe("module-b");
+  });
+
+  test("runs EVA status, deploy, move, and dock through the local habitat api", async () => {
+    apiHumanState = {
+      habitatId: "habitat-1",
+      humans: [{ id: "human-1", displayName: "Henry", locationModuleId: "suitport-1" }],
+    };
+
+    await captureHabitatRun(["node", "habitat", "eva", "deploy", "human-1"]);
+    const moveResult = await captureHabitatRun(["node", "habitat", "eva", "move", "1", "0"]);
+    const statusResult = await captureHabitatRun(["node", "habitat", "eva", "status"]);
+    const dockResult = await captureHabitatRun(["node", "habitat", "eva", "dock"]);
+
+    expect(moveResult.errors).toEqual([]);
+    expect(moveResult.output).toEqual(["Explorer moved to (1, 0)."]);
+    expect(statusResult.output.join("\n")).toContain("Explorer: human-1");
+    expect(statusResult.output.join("\n")).toContain("Position: (1, 0)");
+    expect(dockResult.output).toEqual(["Explorer docked at (0, 0)."]);
   });
 
   test("lists local modules with labeled columns and power draw", async () => {

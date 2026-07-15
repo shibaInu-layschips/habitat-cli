@@ -30,6 +30,7 @@ import { readWorldScan } from "./kepler-world-scan";
 import { readSimulationState } from "./power-simulation";
 import { readHumanState } from "./human-storage";
 import { moveHuman } from "./human-behavior";
+import { deployExplorer, dockExplorer, moveExplorer, readEvaState } from "./eva-state";
 
 export const app = new Hono();
 
@@ -209,6 +210,69 @@ app.put("/humans/:humanId", async (c) => {
     const message = error instanceof Error ? error.message : "Unable to move human.";
     const status = message.startsWith("No human") || message.startsWith("No module") ? 404 : 409;
     return respondJson(c, { error: message }, "human move rejected", status);
+  }
+});
+
+app.get("/eva/status", async (c) => {
+  return respondJson(c, { eva: await readEvaState() }, "EVA status returned");
+});
+
+app.post("/eva/deploy", async (c) => {
+  let requestBody: unknown = null;
+
+  try {
+    requestBody = await c.req.json();
+  } catch {
+    requestBody = null;
+  }
+
+  const record = requestBody && typeof requestBody === "object" ? (requestBody as Record<string, unknown>) : null;
+  const humanId = typeof record?.humanId === "string" ? record.humanId.trim() : "";
+
+  if (!humanId) {
+    return respondJson(c, { error: "humanId is required." }, "EVA deploy missing human", 400);
+  }
+
+  try {
+    return respondJson(c, { eva: await deployExplorer(humanId) }, `EVA deployed human "${humanId}"`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to deploy explorer.";
+    const status = message.startsWith("No human") ? 404 : 409;
+    return respondJson(c, { error: message }, "EVA deploy rejected", status);
+  }
+});
+
+app.post("/eva/move", async (c) => {
+  let requestBody: unknown = null;
+
+  try {
+    requestBody = await c.req.json();
+  } catch {
+    requestBody = null;
+  }
+
+  const record = requestBody && typeof requestBody === "object" ? (requestBody as Record<string, unknown>) : null;
+  const x = typeof record?.x === "number" && Number.isInteger(record.x) ? record.x : null;
+  const y = typeof record?.y === "number" && Number.isInteger(record.y) ? record.y : null;
+
+  if (x === null || y === null) {
+    return respondJson(c, { error: "x and y must be integers." }, "EVA move invalid coordinates", 400);
+  }
+
+  try {
+    return respondJson(c, { eva: await moveExplorer(x, y) }, `EVA moved to (${x}, ${y})`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to move explorer.";
+    return respondJson(c, { error: message }, "EVA move rejected", 409);
+  }
+});
+
+app.post("/eva/dock", async (c) => {
+  try {
+    return respondJson(c, { eva: await dockExplorer() }, "EVA docked");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to dock explorer.";
+    return respondJson(c, { error: message }, "EVA dock rejected", 409);
   }
 });
 

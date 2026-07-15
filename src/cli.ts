@@ -48,7 +48,7 @@ import {
   type HabitatSolarIrradianceResponse,
   type HabitatUnregisterResponse,
 } from "./habitat-api-client";
-import type { HabitatHuman, HabitatModule } from "./types";
+import type { EvaState, HabitatHuman, HabitatModule } from "./types";
 
 const allowedModuleStatuses = ["offline", "idle", "online", "active", "damaged"] as const;
 
@@ -129,6 +129,37 @@ async function moveRemoteHuman(humanId: string, destinationModuleId: string) {
     { locationModuleId: destinationModuleId },
   );
   return response.human;
+}
+
+async function readRemoteEvaState() {
+  const response = await getHabitatApiJson<{ eva: EvaState }>("/eva/status");
+  return response.eva;
+}
+
+async function deployRemoteExplorer(humanId: string) {
+  const response = await postHabitatApiJson<{ eva: EvaState }>("/eva/deploy", { humanId });
+  return response.eva;
+}
+
+async function moveRemoteExplorer(x: number, y: number) {
+  const response = await postHabitatApiJson<{ eva: EvaState }>("/eva/move", { x, y });
+  return response.eva;
+}
+
+async function dockRemoteExplorer() {
+  const response = await postHabitatApiJson<{ eva: EvaState }>("/eva/dock", {});
+  return response.eva;
+}
+
+function printEvaStatus(eva: EvaState) {
+  console.log("EVA Status");
+  console.log(`Explorer: ${eva.deployedHumanId ?? "None"}`);
+  console.log(`Position: (${eva.x}, ${eva.y})`);
+  console.log(`Maximum Carrying Capacity: ${formatNumber(eva.maxCarryingCapacityKg)} kg`);
+  const carriedResources = Object.entries(eva.carriedResources);
+  console.log(
+    `Carried Resources: ${carriedResources.length === 0 ? "None" : carriedResources.map(([resource, quantity]) => `${resource} ${formatNumber(quantity)} kg`).join(", ")}`,
+  );
 }
 
 async function addRemoteInventoryItem(resourceType: string, quantity: number) {
@@ -343,6 +374,7 @@ Habitat CLI for this lab:
   resource    Read the Kepler resource catalog
   module      Create, inspect, update, and delete local habitat modules
   human       List and manage habitat humans
+  eva         Deploy and control the habitat explorer
   inventory   Inspect local habitat inventory
   construction Inspect local construction jobs
   battery     Show battery status
@@ -369,6 +401,7 @@ Quick start:
   habitat tick 10
   habitat module list
   habitat human list
+  habitat eva status
   habitat module info workshop-fabricator-1
   habitat module workshop-fabricator-1 status
   habitat inventory list
@@ -553,6 +586,10 @@ Environment:
     .command("human")
     .description("Inspect and manage habitat humans.");
 
+  const evaCommand = program
+    .command("eva")
+    .description("Deploy and control the habitat explorer.");
+
   const blueprintCommand = program
     .command("blueprint")
     .description("Read the blueprint catalog through the backend.");
@@ -608,6 +645,69 @@ Environment:
       } catch (error) {
         const message = getApiErrorMessage(error, "Unable to read humans.");
         console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  evaCommand
+    .command("status")
+    .description("Show the current EVA explorer state.")
+    .action(async () => {
+      try {
+        printEvaStatus(await readRemoteEvaState());
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to read EVA status."));
+        process.exitCode = 1;
+      }
+    });
+
+  evaCommand
+    .command("deploy")
+    .description("Deploy one human from the active suitport.")
+    .argument("<human-id>", "human ID")
+    .action(async (humanId) => {
+      try {
+        const eva = await deployRemoteExplorer(humanId);
+        console.log(`Deployed ${eva.deployedHumanId} at (0, 0).`);
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to deploy explorer."));
+        process.exitCode = 1;
+      }
+    });
+
+  evaCommand
+    .command("move")
+    .description("Move the explorer one adjacent grid tile.")
+    .argument("<x>", "destination x coordinate")
+    .argument("<y>", "destination y coordinate")
+    .action(async (xArg, yArg) => {
+      const x = parseIntegerOption(xArg);
+      const y = parseIntegerOption(yArg);
+
+      if (x === null || y === null) {
+        console.error("x and y must be integers.");
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const eva = await moveRemoteExplorer(x, y);
+        console.log(`Explorer moved to (${eva.x}, ${eva.y}).`);
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to move explorer."));
+        process.exitCode = 1;
+      }
+    });
+
+  evaCommand
+    .command("dock")
+    .description("Dock the explorer at (0, 0).")
+    .action(async () => {
+      try {
+        await dockRemoteExplorer();
+        console.log("Explorer docked at (0, 0).");
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to dock explorer."));
         process.exitCode = 1;
       }
     });

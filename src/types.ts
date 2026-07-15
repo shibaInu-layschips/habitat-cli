@@ -18,6 +18,17 @@ export type HabitatHuman = {
   locationModuleId: string;
 };
 
+export type EvaCarriedResources = Record<string, number>;
+
+export type EvaState = {
+  habitatId: string | null;
+  deployedHumanId: string | null;
+  x: number;
+  y: number;
+  carriedResources: EvaCarriedResources;
+  maxCarryingCapacityKg: number;
+};
+
 export type AlertContract = {
   schemaVersion: string;
   schema: JsonSchemaLike;
