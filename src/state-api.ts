@@ -30,7 +30,7 @@ import { readWorldScan } from "./kepler-world-scan";
 import { readSimulationState } from "./power-simulation";
 import { readHumanState } from "./human-storage";
 import { moveHuman } from "./human-behavior";
-import { deployExplorer, dockExplorer, moveExplorer, readEvaState } from "./eva-state";
+import { collectExplorer, deployExplorer, dockExplorer, moveExplorer, readEvaState } from "./eva-state";
 
 export const app = new Hono();
 
@@ -273,6 +273,42 @@ app.post("/eva/dock", async (c) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to dock explorer.";
     return respondJson(c, { error: message }, "EVA dock rejected", 409);
+  }
+});
+
+app.post("/collect", async (c) => {
+  let requestBody: unknown = null;
+
+  try {
+    requestBody = await c.req.json();
+  } catch {
+    requestBody = null;
+  }
+
+  const record = requestBody && typeof requestBody === "object" ? (requestBody as Record<string, unknown>) : null;
+  const quantityKg = typeof record?.quantityKg === "number" ? record.quantityKg : NaN;
+
+  if (!Number.isFinite(quantityKg) || quantityKg <= 0) {
+    return respondJson(c, { error: "quantityKg must be a positive number." }, "collection request invalid", 400);
+  }
+
+  try {
+    const result = await collectExplorer(quantityKg);
+    const { collectedResourceType, collectedQuantityKg, ...eva } = result;
+    return respondJson(
+      c,
+      {
+        eva,
+        resourceType: collectedResourceType,
+        quantityKg: collectedQuantityKg,
+      },
+      `collected ${collectedQuantityKg} kg of ${collectedResourceType}`,
+      200,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to collect material.";
+    const status = message.startsWith("Kepler") || message.startsWith("Unable to reach Kepler") ? 502 : 409;
+    return respondJson(c, { error: message }, "collection rejected", status);
   }
 });
 

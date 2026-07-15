@@ -151,6 +151,14 @@ async function dockRemoteExplorer() {
   return response.eva;
 }
 
+async function collectRemoteResource(quantityKg: number) {
+  return await postHabitatApiJson<{
+    eva: EvaState;
+    resourceType: string;
+    quantityKg: number;
+  }>("/collect", { quantityKg });
+}
+
 function printEvaStatus(eva: EvaState) {
   console.log("EVA Status");
   console.log(`Explorer: ${eva.deployedHumanId ?? "None"}`);
@@ -368,6 +376,7 @@ Habitat CLI for this lab:
   register    Register this habitat through the backend
   status      Show habitat status
   scan        Scan nearby world resources through the backend
+  collect     Collect material at the saved explorer position
   unregister  Remove this habitat registration through the backend
   tick        Advance the habitat simulation and drain battery power
   blueprint   Read the Kepler blueprint catalog
@@ -692,6 +701,28 @@ Environment:
         console.log("Explorer docked at (0, 0).");
       } catch (error) {
         console.error(getApiErrorMessage(error, "Unable to dock explorer."));
+        process.exitCode = 1;
+      }
+    });
+
+  program
+    .command("collect")
+    .description("Collect material at the saved explorer position.")
+    .argument("<quantity-kg>", "quantity to collect in kilograms")
+    .action(async (quantityArg) => {
+      const quantityKg = Number(quantityArg);
+
+      if (!Number.isFinite(quantityKg) || quantityKg <= 0) {
+        console.error("Quantity must be a positive number of kilograms.");
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const result = await collectRemoteResource(quantityKg);
+        console.log(`Collected ${formatNumber(result.quantityKg)} kg of ${result.resourceType}.`);
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to collect material."));
         process.exitCode = 1;
       }
     });

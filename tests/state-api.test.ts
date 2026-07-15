@@ -137,7 +137,14 @@ describe("state api", () => {
   });
 
   test("exposes EVA deploy, move, status, and dock through the local api", async () => {
-    globalThis.fetch = async () => new Response(JSON.stringify({ tiles: [] }), { status: 200 });
+    globalThis.fetch = async (input, init) => {
+      if (String(input) === "https://planet.turingguild.com/world/collect") {
+        expect(init?.method).toBe("POST");
+        return new Response(JSON.stringify({ resourceType: "ferrite", quantityKg: 5 }), { status: 200 });
+      }
+
+      return new Response(JSON.stringify({ tiles: [] }), { status: 200 });
+    };
     await hydrateModules("habitat-1", [
       {
         id: "suitport-1",
@@ -171,6 +178,16 @@ describe("state api", () => {
     );
     expect(moveResponse.status).toBe(200);
     expect(await moveResponse.json()).toMatchObject({ eva: { x: 1, y: 0 } });
+
+    const collectResponse = await app.fetch(
+      new Request("http://localhost/collect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quantityKg: 5 }),
+      }),
+    );
+    expect(collectResponse.status).toBe(200);
+    expect(await collectResponse.json()).toMatchObject({ eva: { carriedResources: { ferrite: 5 } } });
 
     const statusResponse = await app.fetch(new Request("http://localhost/eva/status"));
     expect(statusResponse.status).toBe(200);

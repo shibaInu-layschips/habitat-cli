@@ -1,4 +1,5 @@
 import { readHumanState } from "./human-storage";
+import { collectWorldResource } from "./kepler-world-collect";
 import { assertCoordinateInCurrentKeplerSector } from "./kepler-world-scan";
 import { listModules } from "./module-storage";
 import { readStateBlob, writeStateBlob } from "./sqlite-storage";
@@ -63,6 +64,31 @@ function readEvaStateBlob() {
 
 function writeEvaStateBlob(state: EvaState) {
   writeStateBlob(EVA_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function totalCarriedKg(state: EvaState) {
+  return Object.values(state.carriedResources).reduce((total, quantity) => total + quantity, 0);
+}
+
+function parseCollectedResource(responseBody: unknown, requestedQuantityKg: number) {
+  const response = isObject(responseBody) ? responseBody : {};
+  const collected = isObject(response.collected) ? response.collected : response;
+  const resourceType = typeof collected.resourceType === "string" && collected.resourceType.length > 0
+    ? collected.resourceType
+    : null;
+  const quantityKg =
+    typeof collected.quantityKg === "number" ? collected.quantityKg :
+      typeof collected.quantity === "number" ? collected.quantity : null;
+
+  if (!resourceType || quantityKg === null || !Number.isFinite(quantityKg) || quantityKg <= 0) {
+    throw new Error("Kepler returned an invalid collection result.");
+  }
+
+  if (quantityKg > requestedQuantityKg) {
+    throw new Error("Kepler returned more material than requested.");
+  }
+
+  return { resourceType, quantityKg };
 }
 
 export async function readEvaState() {
@@ -177,4 +203,50 @@ export async function dockExplorer() {
   };
   writeEvaStateBlob(nextState);
   return nextState;
+}
+
+export async function collectExplorer(quantityKg: number) {
+  const current = await readEvaState();
+
+  if (!current.deployedHumanId) {
+    throw new Error("No human is currently deployed.");
+  }
+
+  if (!Number.isFinite(quantityKg) || quantityKg <= 0) {
+    throw new Error("Collection quantity must be a positive number of kilograms.");
+  }
+
+  if (!current.habitatId) {
+    throw new Error("The deployed explorer is not associated with a registered Habitat.");
+  }
+
+  if (totalCarriedKg(current) + quantityKg > current.maxCarryingCapacityKg) {
+    throw new Error("Collection would exceed the explorer's carrying capacity.");
+  }
+
+  const responseBody = await collectWorldResource({
+    habitatId: current.habitatId,
+    x: current.x,
+    y: current.y,
+    quantityKg,
+  });
+  const collected = parseCollectedResource(responseBody, quantityKg);
+
+  if (totalCarriedKg(current) + collected.quantityKg > current.maxCarryingCapacityKg) {
+    throw new Error("Kepler returned more material than the explorer can carry.");
+  }
+
+  const nextState: EvaState = {
+    ...current,
+    carriedResources: {
+      ...current.carriedResources,
+      [collected.resourceType]: (current.carriedResources[collected.resourceType] ?? 0) + collected.quantityKg,
+    },
+  };
+  writeEvaStateBlob(nextState);
+  return {
+    ...nextState,
+    collectedResourceType: collected.resourceType,
+    collectedQuantityKg: collected.quantityKg,
+  };
 }

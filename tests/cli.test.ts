@@ -108,6 +108,19 @@ async function apiFetchRouter(input: RequestInfo | URL, init?: RequestInit) {
     return new Response(JSON.stringify({ eva: apiEvaState }), { status: 200, headers: { "Content-Type": "application/json" } });
   }
 
+  if (url === "http://localhost:8787/collect" && method === "POST") {
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    const quantityKg = typeof body?.quantityKg === "number" ? body.quantityKg : 0;
+    apiEvaState = {
+      ...apiEvaState,
+      carriedResources: {
+        ...apiEvaState.carriedResources,
+        ferrite: (apiEvaState.carriedResources.ferrite ?? 0) + quantityKg,
+      },
+    };
+    return new Response(JSON.stringify({ eva: apiEvaState, resourceType: "ferrite", quantityKg }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
+
   if (url.startsWith("http://localhost:8787/humans/") && method === "PUT") {
     const humanId = decodeURIComponent(url.slice("http://localhost:8787/humans/".length));
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
@@ -850,11 +863,13 @@ describe("habitat CLI", () => {
 
     await captureHabitatRun(["node", "habitat", "eva", "deploy", "human-1"]);
     const moveResult = await captureHabitatRun(["node", "habitat", "eva", "move", "1", "0"]);
+    const collectResult = await captureHabitatRun(["node", "habitat", "collect", "5"]);
     const statusResult = await captureHabitatRun(["node", "habitat", "eva", "status"]);
     const dockResult = await captureHabitatRun(["node", "habitat", "eva", "dock"]);
 
     expect(moveResult.errors).toEqual([]);
     expect(moveResult.output).toEqual(["Explorer moved to (1, 0)."]);
+    expect(collectResult.output).toEqual(["Collected 5 kg of ferrite."]);
     expect(statusResult.output.join("\n")).toContain("Explorer: human-1");
     expect(statusResult.output.join("\n")).toContain("Position: (1, 0)");
     expect(dockResult.output).toEqual(["Explorer docked at (0, 0)."]);

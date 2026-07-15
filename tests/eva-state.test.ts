@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deployExplorer, dockExplorer, moveExplorer, readEvaState } from "../src/eva-state";
+import { collectExplorer, deployExplorer, dockExplorer, moveExplorer, readEvaState } from "../src/eva-state";
 import { hydrateHumans } from "../src/human-storage";
 import { hydrateModules } from "../src/module-storage";
 import type { HabitatHuman, HabitatModule } from "../src/types";
@@ -97,5 +97,29 @@ describe("eva state", () => {
   test("docking at origin clears the deployed explorer state", async () => {
     await deployExplorer("human-1");
     await expect(dockExplorer()).resolves.toMatchObject({ deployedHumanId: null, x: 0, y: 0 });
+  });
+
+  test("collects at the saved explorer position and persists carried resources", async () => {
+    await deployExplorer("human-1");
+    globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe("https://planet.turingguild.com/world/collect");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        habitatId: "habitat-1",
+        x: 0,
+        y: 0,
+        quantityKg: 5,
+      });
+      return new Response(JSON.stringify({ resourceType: "ferrite", quantityKg: 5 }), { status: 200 });
+    };
+
+    await expect(collectExplorer(5)).resolves.toMatchObject({ carriedResources: { ferrite: 5 } });
+    expect((await readEvaState()).carriedResources).toEqual({ ferrite: 5 });
+  });
+
+  test("rejects collection without an explorer or enough carrying capacity", async () => {
+    await expect(collectExplorer(1)).rejects.toThrow("No human is currently deployed.");
+    await deployExplorer("human-1");
+    await expect(collectExplorer(21)).rejects.toThrow("carrying capacity");
   });
 });
