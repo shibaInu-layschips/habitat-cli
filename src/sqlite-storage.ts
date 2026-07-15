@@ -62,3 +62,8 @@ export function deleteStateBlob(namespace: string) {
   const database = getSqliteDatabase();
   database.query("DELETE FROM state_blobs WHERE namespace = ?").run(namespace);
 }
+
+export function runSqliteTransaction<T>(work: () => T): T {
+  const database = getSqliteDatabase();
+  return database.transaction(work)();
+}

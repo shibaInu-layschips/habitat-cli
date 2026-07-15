@@ -44,7 +44,7 @@ function parseInventoryItem(value: unknown): InventoryItem | null {
   };
 }
 
-function readInventoryStateBlob(): InventoryState {
+export function readInventoryStateBlob(): InventoryState {
   const raw = readStateBlob(INVENTORY_STATE_NAMESPACE);
 
   if (!raw) {
@@ -65,7 +65,7 @@ function readInventoryStateBlob(): InventoryState {
   }
 }
 
-function writeInventoryStateBlob(state: InventoryState) {
+export function writeInventoryStateBlob(state: InventoryState) {
   writeStateBlob(INVENTORY_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
 }
 

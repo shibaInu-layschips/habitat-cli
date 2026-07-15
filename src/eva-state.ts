@@ -1,8 +1,10 @@
-import { readHumanState } from "./human-storage";
+import { readHumanState, readHumanStateBlob, writeHumanStateBlob } from "./human-storage";
+import { observeAlert, resolveAlert } from "./habitat-alerts";
+import { readInventoryStateBlob, writeInventoryStateBlob } from "./inventory-storage";
 import { collectWorldResource } from "./kepler-world-collect";
 import { assertCoordinateInCurrentKeplerSector } from "./kepler-world-scan";
 import { listModules } from "./module-storage";
-import { readStateBlob, writeStateBlob } from "./sqlite-storage";
+import { readStateBlob, runSqliteTransaction, writeStateBlob } from "./sqlite-storage";
 import type { EvaState, HabitatModule } from "./types";
 
 const EVA_STATE_NAMESPACE = "eva";
@@ -160,6 +162,13 @@ export async function deployExplorer(humanId: string) {
     maxCarryingCapacityKg,
   };
   writeEvaStateBlob(nextState);
+  await observeAlert({
+    conditionKey: "human-deployed-outside-habitat",
+    severity: "warning",
+    source: "habitat.eva",
+    message: `Human "${human.id}" is deployed outside the habitat.`,
+    subject: { humanId: human.id, moduleId: suitport.id },
+  });
   return nextState;
 }
 
@@ -196,12 +205,59 @@ export async function dockExplorer() {
     throw new Error("The explorer can only dock at (0, 0).");
   }
 
+  const humanState = await readHumanState();
+  const human = humanState.humans.find((candidate) => candidate.id === current.deployedHumanId);
+  if (!human) {
+    throw new Error(`No human with ID "${current.deployedHumanId}" was found.`);
+  }
+
+  const suitport = await getActiveSuitport();
+  if (!suitport) {
+    throw new Error("No active suitport module is available.");
+  }
+
   const nextState: EvaState = {
     ...current,
     deployedHumanId: null,
+    x: 0,
+    y: 0,
     carriedResources: {},
   };
-  writeEvaStateBlob(nextState);
+
+  runSqliteTransaction(() => {
+    const inventory = readInventoryStateBlob();
+    const nextItems = [...inventory.items];
+    for (const [resourceType, quantity] of Object.entries(current.carriedResources)) {
+      const existing = nextItems.find((item) => item.resourceType === resourceType);
+      if (existing) {
+        existing.quantity += quantity;
+      } else {
+        nextItems.push({
+          resourceType,
+          displayName: resourceType
+            .split(/[-_]/g)
+            .filter(Boolean)
+            .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+            .join(" "),
+          quantity,
+          unit: "kg",
+        });
+      }
+    }
+
+    writeInventoryStateBlob({ items: nextItems });
+    writeHumanStateBlob({
+      ...humanState,
+      humans: humanState.humans.map((candidate) =>
+        candidate.id === human.id ? { ...candidate, locationModuleId: suitport.id } : candidate,
+      ),
+    });
+    writeEvaStateBlob(nextState);
+  });
+
+  await resolveAlert("human-deployed-outside-habitat");
+  await resolveAlert("carried-material-at-capacity");
+
   return nextState;
 }
 
@@ -224,13 +280,35 @@ export async function collectExplorer(quantityKg: number) {
     throw new Error("Collection would exceed the explorer's carrying capacity.");
   }
 
-  const responseBody = await collectWorldResource({
-    habitatId: current.habitatId,
-    x: current.x,
-    y: current.y,
-    quantityKg,
-  });
-  const collected = parseCollectedResource(responseBody, quantityKg);
+  let responseBody: unknown;
+  try {
+    responseBody = await collectWorldResource({
+      habitatId: current.habitatId,
+      x: current.x,
+      y: current.y,
+      quantityKg,
+    });
+  } catch (error) {
+    await observeAlert({
+      conditionKey: "collection-attempt-failed",
+      severity: "warning",
+      source: "habitat.collection",
+      message: error instanceof Error ? error.message : "Collection failed after local validation.",
+    });
+    throw error;
+  }
+  let collected: { resourceType: string; quantityKg: number };
+  try {
+    collected = parseCollectedResource(responseBody, quantityKg);
+  } catch (error) {
+    await observeAlert({
+      conditionKey: "collection-attempt-failed",
+      severity: "warning",
+      source: "habitat.collection",
+      message: error instanceof Error ? error.message : "Collection failed after local validation.",
+    });
+    throw error;
+  }
 
   if (totalCarriedKg(current) + collected.quantityKg > current.maxCarryingCapacityKg) {
     throw new Error("Kepler returned more material than the explorer can carry.");
@@ -244,6 +322,15 @@ export async function collectExplorer(quantityKg: number) {
     },
   };
   writeEvaStateBlob(nextState);
+  if (totalCarriedKg(nextState) >= nextState.maxCarryingCapacityKg) {
+    await observeAlert({
+      conditionKey: "carried-material-at-capacity",
+      severity: "warning",
+      source: "habitat.eva",
+      message: "The explorer has reached carrying capacity.",
+      subject: { humanId: current.deployedHumanId },
+    });
+  }
   return {
     ...nextState,
     collectedResourceType: collected.resourceType,

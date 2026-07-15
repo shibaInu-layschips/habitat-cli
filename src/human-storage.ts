@@ -43,7 +43,7 @@ function parseHuman(value: unknown): HabitatHuman | null {
   };
 }
 
-function readHumanStateBlob(): HabitatHumanState {
+export function readHumanStateBlob(): HabitatHumanState {
   const raw = readStateBlob(HUMANS_STATE_NAMESPACE);
 
   if (!raw) {
@@ -66,7 +66,7 @@ function readHumanStateBlob(): HabitatHumanState {
   }
 }
 
-function writeHumanStateBlob(state: HabitatHumanState) {
+export function writeHumanStateBlob(state: HabitatHumanState) {
   writeStateBlob(HUMANS_STATE_NAMESPACE, `${JSON.stringify(state, null, 2)}\n`);
 }
 

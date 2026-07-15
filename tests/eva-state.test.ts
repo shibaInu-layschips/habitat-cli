@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectExplorer, deployExplorer, dockExplorer, moveExplorer, readEvaState } from "../src/eva-state";
 import { hydrateHumans } from "../src/human-storage";
+import { readInventoryState } from "../src/inventory-storage";
+import { readHumanState } from "../src/human-storage";
 import { hydrateModules } from "../src/module-storage";
 import type { HabitatHuman, HabitatModule } from "../src/types";
 
@@ -96,7 +98,28 @@ describe("eva state", () => {
 
   test("docking at origin clears the deployed explorer state", async () => {
     await deployExplorer("human-1");
+    globalThis.fetch = async () => new Response(JSON.stringify({ resourceType: "ferrite", quantityKg: 5 }), { status: 200 });
+    await collectExplorer(5);
+
     await expect(dockExplorer()).resolves.toMatchObject({ deployedHumanId: null, x: 0, y: 0 });
+    expect((await readEvaState()).carriedResources).toEqual({});
+    expect((await readInventoryState()).items).toEqual([
+      { resourceType: "ferrite", displayName: "Ferrite", quantity: 5, unit: "kg" },
+    ]);
+    expect((await readHumanState()).humans[0]?.locationModuleId).toBe("habitat-suitport-1");
+  });
+
+  test("does not save any dock changes when the suitport is unavailable", async () => {
+    await deployExplorer("human-1");
+    globalThis.fetch = async () => new Response(JSON.stringify({ resourceType: "ferrite", quantityKg: 5 }), { status: 200 });
+    await collectExplorer(5);
+    await hydrateModules("habitat-1", [modules[1]!]);
+
+    await expect(dockExplorer()).rejects.toThrow("No active suitport module");
+    expect((await readEvaState()).deployedHumanId).toBe("human-1");
+    expect((await readEvaState()).carriedResources).toEqual({ ferrite: 5 });
+    expect((await readInventoryState()).items).toEqual([]);
+    expect((await readHumanState()).humans[0]?.locationModuleId).toBe("habitat-suitport-1");
   });
 
   test("collects at the saved explorer position and persists carried resources", async () => {

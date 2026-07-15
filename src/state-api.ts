@@ -27,10 +27,11 @@ import {
 import { listResourceCatalog } from "./kepler-resources";
 import { readSolarIrradianceReading } from "./kepler-irradiance";
 import { readWorldScan } from "./kepler-world-scan";
-import { readSimulationState } from "./power-simulation";
+import { readSimulationState, runPowerTicks } from "./power-simulation";
 import { readHumanState } from "./human-storage";
 import { moveHuman } from "./human-behavior";
 import { collectExplorer, deployExplorer, dockExplorer, moveExplorer, readEvaState } from "./eva-state";
+import { acknowledgeAlert, listAlerts } from "./habitat-alerts";
 
 export const app = new Hono();
 
@@ -63,6 +64,21 @@ app.use("*", async (c, next) => {
 });
 
 app.get("/health", (c) => respondJson(c, { ok: true }, "ok"));
+
+app.get("/alerts", async (c) => {
+  const alerts = await listAlerts();
+  return respondJson(c, { alerts }, `${alerts.length} alerts`);
+});
+
+app.post("/alerts/:alertId/acknowledge", async (c) => {
+  try {
+    const alert = await acknowledgeAlert(c.req.param("alertId"));
+    return respondJson(c, { alert }, `acknowledged alert "${alert.id}"`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to acknowledge alert.";
+    return respondJson(c, { error: message }, "alert acknowledgement rejected", 409);
+  }
+});
 
 app.get("/registration", async (c) => {
   const registration = await readRegistration();
@@ -497,6 +513,31 @@ app.post("/inventory/spend", async (c) => {
 });
 app.get("/construction", async (c) => respondJson(c, await readConstructionState(), "construction snapshot"));
 app.get("/simulation", async (c) => respondJson(c, await readSimulationState(), "simulation snapshot"));
+app.post("/simulation/ticks", async (c) => {
+  let requestBody: unknown = null;
+
+  try {
+    requestBody = await c.req.json();
+  } catch {
+    requestBody = null;
+  }
+
+  const record = requestBody && typeof requestBody === "object" ? (requestBody as Record<string, unknown>) : null;
+  const ticks = typeof record?.ticks === "number" && Number.isInteger(record.ticks) ? record.ticks : null;
+
+  if (ticks === null || ticks < 1) {
+    return respondJson(c, { error: "ticks must be a positive whole number." }, "tick request invalid", 400);
+  }
+
+  try {
+    const summary = await runPowerTicks(ticks);
+    return respondJson(c, { summary }, `advanced ${summary.ticksApplied} ticks`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to advance simulation ticks.";
+    const status = message.startsWith("Tick count must") ? 400 : 409;
+    return respondJson(c, { error: message }, "tick advance rejected", status);
+  }
+});
 
 app.get("/catalog/blueprints", async (c) => {
   try {

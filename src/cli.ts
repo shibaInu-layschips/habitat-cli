@@ -151,6 +151,17 @@ async function dockRemoteExplorer() {
   return response.eva;
 }
 
+async function readRemoteAlerts() {
+  return await getHabitatApiJson<{ alerts: Array<Record<string, unknown>> }>("/alerts");
+}
+
+async function acknowledgeRemoteAlert(alertId: string) {
+  return await postHabitatApiJson<{ alert: Record<string, unknown> }>(
+    `/alerts/${encodeURIComponent(alertId)}/acknowledge`,
+    {},
+  );
+}
+
 async function collectRemoteResource(quantityKg: number) {
   return await postHabitatApiJson<{
     eva: EvaState;
@@ -595,6 +606,10 @@ Environment:
     .command("inventory")
     .description("Inspect local habitat inventory.");
 
+  const alertCommand = program
+    .command("alert")
+    .description("Inspect and acknowledge persisted habitat alerts.");
+
   humanCommand
     .command("move")
     .description("Move a human to a habitat module.")
@@ -829,6 +844,45 @@ Environment:
       } catch (error) {
         const message = getApiErrorMessage(error, "Unable to read inventory.");
         console.error(message);
+        process.exitCode = 1;
+      }
+    });
+
+  alertCommand
+    .command("list")
+    .description("List persisted habitat alerts.")
+    .option("--json", "print the complete JSON response")
+    .action(async (options) => {
+      try {
+        const response = await readRemoteAlerts();
+        if (options.json) {
+          console.log(JSON.stringify(response, null, 2));
+          return;
+        }
+        if (response.alerts.length === 0) {
+          console.log("No alerts recorded.");
+          return;
+        }
+        console.log("Habitat Alerts");
+        for (const alert of response.alerts) {
+          console.log(`${String(alert.id)} | ${String(alert.status)} | ${String(alert.severity)} | ${String(alert.source)} | ${String(alert.message)} | occurrences: ${String(alert.occurrenceCount)}`);
+        }
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to read alerts."));
+        process.exitCode = 1;
+      }
+    });
+
+  alertCommand
+    .command("acknowledge")
+    .description("Acknowledge one persisted alert.")
+    .argument("<alert-id>", "alert ID")
+    .action(async (alertId) => {
+      try {
+        const response = await acknowledgeRemoteAlert(alertId);
+        console.log(`Acknowledged alert ${String(response.alert.id)}.`);
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to acknowledge alert."));
         process.exitCode = 1;
       }
     });

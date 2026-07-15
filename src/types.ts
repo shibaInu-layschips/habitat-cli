@@ -38,6 +38,31 @@ export type RegistrationContracts = {
   alerts: AlertContract;
 };
 
+export type HabitatAlertStatus = "open" | "acknowledged" | "resolved";
+
+export type HabitatAlert = {
+  id: string;
+  conditionKey: string;
+  severity: string;
+  status: HabitatAlertStatus;
+  source: string;
+  message: string;
+  createdAt: string;
+  lastObservedAt: string;
+  occurrenceCount: number;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+  subject?: {
+    humanId?: string;
+    moduleId?: string;
+  };
+  contractSchemaVersion: string;
+};
+
+export type HabitatAlertState = {
+  alerts: HabitatAlert[];
+};
+
 export type HabitatModuleState = {
   habitatId: string | null;
   modules: HabitatModule[];
