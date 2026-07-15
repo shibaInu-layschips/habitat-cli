@@ -86,6 +86,26 @@ async function apiFetchRouter(input: RequestInfo | URL, init?: RequestInit) {
     });
   }
 
+  if (url.startsWith("http://localhost:8787/humans/") && method === "PUT") {
+    const humanId = decodeURIComponent(url.slice("http://localhost:8787/humans/".length));
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    const destinationModuleId = typeof body?.locationModuleId === "string" ? body.locationModuleId : "";
+    const human = apiHumanState.humans.find((candidate) => candidate.id === humanId) ?? null;
+
+    if (!human) {
+      return new Response(JSON.stringify({ error: `No human with ID "${humanId}" was found.` }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    human.locationModuleId = destinationModuleId;
+    return new Response(JSON.stringify({ human }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   if (url === "http://localhost:8787/modules" && method === "GET") {
     return new Response(JSON.stringify(apiModuleState), {
       status: 200,
@@ -777,6 +797,19 @@ describe("habitat CLI", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.output).toEqual(["No humans recorded."]);
+  });
+
+  test("moves a human through the local habitat api", async () => {
+    apiHumanState = {
+      habitatId: "habitat-1",
+      humans: [{ id: "human-1", displayName: "Henry", locationModuleId: "module-a" }],
+    };
+
+    const result = await captureHabitatRun(["node", "habitat", "human", "move", "human-1", "module-b"]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.output).toEqual(["Moved Henry to module-b."]);
+    expect(apiHumanState.humans[0]?.locationModuleId).toBe("module-b");
   });
 
   test("lists local modules with labeled columns and power draw", async () => {

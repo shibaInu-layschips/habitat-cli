@@ -29,6 +29,7 @@ import { readSolarIrradianceReading } from "./kepler-irradiance";
 import { readWorldScan } from "./kepler-world-scan";
 import { readSimulationState } from "./power-simulation";
 import { readHumanState } from "./human-storage";
+import { moveHuman } from "./human-behavior";
 
 export const app = new Hono();
 
@@ -185,6 +186,32 @@ app.get("/humans", async (c) => {
   return respondJson(c, state, `${state.humans.length} humans`);
 });
 
+app.put("/humans/:humanId", async (c) => {
+  let requestBody: unknown = null;
+
+  try {
+    requestBody = await c.req.json();
+  } catch {
+    requestBody = null;
+  }
+
+  const record = requestBody && typeof requestBody === "object" ? (requestBody as Record<string, unknown>) : null;
+  const destinationModuleId = typeof record?.locationModuleId === "string" ? record.locationModuleId.trim() : "";
+
+  if (!destinationModuleId) {
+    return respondJson(c, { error: "locationModuleId is required." }, "human move missing destination", 400);
+  }
+
+  try {
+    const human = await moveHuman(c.req.param("humanId"), destinationModuleId);
+    return respondJson(c, { human }, `moved human "${human.id}" to "${human.locationModuleId}"`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to move human.";
+    const status = message.startsWith("No human") || message.startsWith("No module") ? 404 : 409;
+    return respondJson(c, { error: message }, "human move rejected", status);
+  }
+});
+
 app.get("/modules", async (c) => {
   const state = await readModuleState();
   return respondJson(c, state, `${state.modules.length} modules`);
@@ -256,6 +283,19 @@ app.put("/modules/:moduleId", async (c) => {
 
 app.delete("/modules/:moduleId", async (c) => {
   const moduleId = c.req.param("moduleId");
+  const module = await getModule(moduleId);
+
+  if (module) {
+    const humanState = await readHumanState();
+    const occupied = humanState.humans.some(
+      (human) => human.locationModuleId === module.id || human.locationModuleId === module.slug,
+    );
+
+    if (occupied) {
+      return respondJson(c, { error: `Module "${moduleId}" cannot be deleted while humans are inside it.` }, "module deletion rejected", 409);
+    }
+  }
+
   const deleted = await deleteModule(moduleId);
 
   if (!deleted) {

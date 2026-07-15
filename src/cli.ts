@@ -48,7 +48,7 @@ import {
   type HabitatSolarIrradianceResponse,
   type HabitatUnregisterResponse,
 } from "./habitat-api-client";
-import type { HabitatModule } from "./types";
+import type { HabitatHuman, HabitatModule } from "./types";
 
 const allowedModuleStatuses = ["offline", "idle", "online", "active", "damaged"] as const;
 
@@ -121,6 +121,14 @@ async function readRemoteInventoryItems() {
 
 async function readRemoteHumanState() {
   return await getHabitatApiJson<HabitatHumanStateResponse>("/humans");
+}
+
+async function moveRemoteHuman(humanId: string, destinationModuleId: string) {
+  const response = await putHabitatApiJson<{ human: HabitatHuman }>(
+    `/humans/${encodeURIComponent(humanId)}`,
+    { locationModuleId: destinationModuleId },
+  );
+  return response.human;
 }
 
 async function addRemoteInventoryItem(resourceType: string, quantity: number) {
@@ -556,6 +564,22 @@ Environment:
   const inventoryCommand = program
     .command("inventory")
     .description("Inspect local habitat inventory.");
+
+  humanCommand
+    .command("move")
+    .description("Move a human to a habitat module.")
+    .argument("<human-id>", "human ID")
+    .argument("<module-id>", "destination module ID or short name")
+    .action(async (humanId, destinationModuleId) => {
+      try {
+        const human = await moveRemoteHuman(humanId, destinationModuleId);
+        console.log(`Moved ${human.displayName} to ${human.locationModuleId}.`);
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to move human.");
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
 
   humanCommand
     .command("list")

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app } from "../src/state-api";
 import { hydrateHumans } from "../src/human-storage";
+import { hydrateModules } from "../src/module-storage";
 
 let originalCwd = "";
 let workspaceDir = "";
@@ -58,6 +59,79 @@ describe("state api", () => {
         },
       ],
     });
+  });
+
+  test("moves a human through the local habitat api", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-a",
+        slug: "module-a",
+        blueprintId: "command-module",
+        displayName: "Command Module",
+        connectedTo: [],
+        runtimeAttributes: { status: "offline", crewCapacity: 2 },
+        capabilities: [],
+      },
+      {
+        id: "module-b",
+        slug: "module-b",
+        blueprintId: "greenhouse",
+        displayName: "Greenhouse",
+        connectedTo: [],
+        runtimeAttributes: { status: "damaged", crewCapacity: 1 },
+        capabilities: [],
+      },
+    ]);
+    await hydrateHumans("habitat-1", [
+      { id: "human-1", displayName: "Henry", locationModuleId: "module-a" },
+      { id: "human-2", displayName: "Caroline", locationModuleId: "module-a" },
+    ]);
+
+    const moveResponse = await app.fetch(
+      new Request("http://localhost/humans/human-1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locationModuleId: "module-b" }),
+      }),
+    );
+
+    expect(moveResponse.status).toBe(200);
+    expect(await moveResponse.json()).toEqual({
+      human: { id: "human-1", displayName: "Henry", locationModuleId: "module-b" },
+    });
+
+    const fullResponse = await app.fetch(
+      new Request("http://localhost/humans/human-2", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locationModuleId: "module-b" }),
+      }),
+    );
+
+    expect(fullResponse.status).toBe(409);
+    expect(await fullResponse.json()).toEqual({ error: 'Module "module-b" has no open crewCapacity.' });
+  });
+
+  test("rejects deleting a module occupied by a human", async () => {
+    await hydrateModules("habitat-1", [
+      {
+        id: "module-a",
+        slug: "module-a",
+        blueprintId: "command-module",
+        displayName: "Command Module",
+        connectedTo: [],
+        runtimeAttributes: { crewCapacity: 2 },
+        capabilities: [],
+      },
+    ]);
+    await hydrateHumans("habitat-1", [
+      { id: "human-1", displayName: "Henry", locationModuleId: "module-a" },
+    ]);
+
+    const response = await app.fetch(new Request("http://localhost/modules/module-a", { method: "DELETE" }));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'Module "module-a" cannot be deleted while humans are inside it.' });
   });
 
   test("returns a friendly not-found response when no registration exists", async () => {
