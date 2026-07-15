@@ -243,3 +243,7 @@ export function parseStarterModules(responseBody: unknown) {
 
   return applyMissingSlugs(parsedModules);
 }
+
+export function findStarterModuleByCapability(responseBody: unknown, capability: string) {
+  return parseStarterModules(responseBody).find((module) => module.capabilities.includes(capability)) ?? null;
+}

@@ -6,7 +6,7 @@ import { runHabitat } from "../src/cli";
 import { hydrateInventory, readInventoryState } from "../src/inventory-storage";
 import { readConstructionState, writeConstructionState } from "../src/construction-storage";
 import { hydrateModules, readModuleState } from "../src/module-storage";
-import type { HabitatModule, HabitatModuleState, InventoryState } from "../src/types";
+import type { HabitatHuman, HabitatModule, HabitatModuleState, InventoryState } from "../src/types";
 
 const workshopModule: HabitatModule = {
   id: "module-workshop",
@@ -65,6 +65,7 @@ let output: string[] = [];
 let errors: string[] = [];
 let apiModuleState: HabitatModuleState;
 let apiInventoryState: InventoryState;
+let apiHumanState: { habitatId: string | null; humans: HabitatHuman[] };
 
 function formatDisplayName(resourceType: string) {
   return resourceType
@@ -77,6 +78,13 @@ function formatDisplayName(resourceType: string) {
 async function apiFetchRouter(input: RequestInfo | URL, init?: RequestInit) {
   const url = String(input);
   const method = init?.method ?? "GET";
+
+  if (url === "http://localhost:8787/humans" && method === "GET") {
+    return new Response(JSON.stringify(apiHumanState), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   if (url === "http://localhost:8787/modules" && method === "GET") {
     return new Response(JSON.stringify(apiModuleState), {
@@ -300,6 +308,7 @@ beforeEach(async () => {
   errors = [];
   apiModuleState = { habitatId: null, modules: [] };
   apiInventoryState = { items: [] };
+  apiHumanState = { habitatId: null, humans: [] };
 
   console.log = (...args: unknown[]) => {
     output.push(args.map(String).join(" "));
@@ -719,6 +728,34 @@ describe("habitat CLI", () => {
     expect(joinedOutput).toContain("photovoltaicCells | Photovoltaic Cells | 24 parts");
     expect(errors).toEqual([]);
     expect(process.exitCode).not.toBe(1);
+  });
+
+  test("lists humans with their assigned module IDs through the local habitat api", async () => {
+    apiHumanState = {
+      habitatId: "habitat-1",
+      humans: [
+        {
+          id: "human-1",
+          displayName: "Henry",
+          locationModuleId: "command-module-1",
+        },
+      ],
+    };
+
+    const result = await captureHabitatRun(["node", "habitat", "human", "list"]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.output).toEqual([
+      "Humans",
+      "human-1 | Henry | command-module-1",
+    ]);
+  });
+
+  test("shows a friendly empty state when no humans are recorded", async () => {
+    const result = await captureHabitatRun(["node", "habitat", "human", "list"]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.output).toEqual(["No humans recorded."]);
   });
 
   test("lists local modules with labeled columns and power draw", async () => {

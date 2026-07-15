@@ -1,6 +1,8 @@
+import { hydrateHumans } from "./human-storage";
 import { hydrateModules, parseStarterModules, readModuleState } from "./module-storage";
 import { logKeplerRequest } from "./kepler-logging";
 import { deleteStateBlob, getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
+import type { AlertContract, HabitatHuman } from "./types";
 
 export type KeplerRegistration = {
   habitatName: string;
@@ -10,6 +12,8 @@ export type KeplerRegistration = {
   status: string;
   registerUrl: string;
   unregisterUrl: string | null;
+  starterHumans: HabitatHuman[];
+  alertContract: AlertContract | null;
   raw: unknown;
 };
 
@@ -63,6 +67,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  return isObject(value) ? value : null;
 }
 
 function findFirstString(value: Record<string, unknown>, keys: string[]) {
@@ -132,6 +140,63 @@ function readHabitatIdentityState(): HabitatIdentityState | null {
 
 export function readHabitatUuid() {
   return readHabitatIdentityState()?.habitatUuid ?? null;
+}
+
+function parseStarterHuman(value: unknown): HabitatHuman | null {
+  const record = asObjectRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const id = asString(record.id);
+  const displayName = asString(record.displayName);
+  const locationModuleId = asString(record.locationModuleId);
+
+  if (!id || !displayName || !locationModuleId) {
+    return null;
+  }
+
+  return {
+    id,
+    displayName,
+    locationModuleId,
+  };
+}
+
+export function parseStarterHumans(responseBody: unknown) {
+  if (!isObject(responseBody) || !Array.isArray(responseBody.starterHumans)) {
+    return [];
+  }
+
+  return responseBody.starterHumans
+    .map(parseStarterHuman)
+    .filter((human): human is HabitatHuman => human !== null);
+}
+
+function getStarterHumansCount(responseBody: unknown) {
+  return isObject(responseBody) && Array.isArray(responseBody.starterHumans) ? responseBody.starterHumans.length : 0;
+}
+
+function getStarterModulesCount(responseBody: unknown) {
+  return isObject(responseBody) && Array.isArray(responseBody.starterModules) ? responseBody.starterModules.length : 0;
+}
+
+export function parseAlertContract(responseBody: unknown): AlertContract | null {
+  if (!isObject(responseBody) || !isObject(responseBody.contracts) || !isObject(responseBody.contracts.alerts)) {
+    return null;
+  }
+
+  const schemaVersion = asString(responseBody.contracts.alerts.schemaVersion);
+  const schema = asObjectRecord(responseBody.contracts.alerts.schema);
+
+  if (!schemaVersion || !schema) {
+    return null;
+  }
+
+  return {
+    schemaVersion,
+    schema,
+  };
 }
 
 function writeHabitatIdentityState(state: HabitatIdentityState) {
@@ -216,12 +281,20 @@ export async function readRegistration(): Promise<KeplerRegistration | null> {
     status: parsed.status,
     registerUrl: parsed.registerUrl,
     unregisterUrl: typeof parsed.unregisterUrl === "string" ? parsed.unregisterUrl : null,
+    starterHumans: Array.isArray(parsed.starterHumans) ? parsed.starterHumans.map(parseStarterHuman).filter((human): human is HabitatHuman => human !== null) : parseStarterHumans(parsed.raw ?? null),
+    alertContract: parseAlertContract(parsed.alertContract ?? null) ?? parseAlertContract(parsed.raw ?? null),
     raw: parsed.raw ?? null,
   };
 }
 
 function clearRegistration() {
   deleteStateBlob(REGISTRATION_STATE_NAMESPACE);
+}
+
+async function rollbackRegistrationPersistence() {
+  clearRegistration();
+  await hydrateModules(null, []);
+  await hydrateHumans(null, []);
 }
 
 function getErrorMessage(error: unknown) {
@@ -341,6 +414,8 @@ function normalizeRegistration(
     status,
     registerUrl,
     unregisterUrl,
+    starterHumans: parseStarterHumans(responseBody),
+    alertContract: parseAlertContract(responseBody),
     raw: responseBody,
   };
 }
@@ -359,8 +434,28 @@ export async function registerHabitat(name: string) {
   try {
     const habitatUuid = await readOrCreateHabitatUuid();
     const registration = await sendRegisterRequest(registerUrl, planetToken, name, habitatUuid);
-    await writeRegistration(registration);
-    await hydrateModules(registration.habitatId, parseStarterModules(registration.raw));
+    const starterModules = parseStarterModules(registration.raw);
+    const starterHumans = registration.starterHumans;
+    const expectedStarterModuleCount = getStarterModulesCount(registration.raw);
+    const expectedStarterHumanCount = getStarterHumansCount(registration.raw);
+
+    if (starterModules.length !== expectedStarterModuleCount) {
+      throw new Error("Could not persist all starter modules from the registration response.");
+    }
+
+    if (starterHumans.length !== expectedStarterHumanCount) {
+      throw new Error("Could not persist all starter humans from the registration response.");
+    }
+
+    try {
+      writeRegistration(registration);
+      await hydrateModules(registration.habitatId, starterModules);
+      await hydrateHumans(registration.habitatId, starterHumans);
+    } catch (error) {
+      await rollbackRegistrationPersistence();
+      throw error;
+    }
+
     return registration;
   } catch (error) {
     if (!isRetryableIdentityFailure(error)) {
@@ -376,8 +471,28 @@ export async function registerHabitat(name: string) {
 
   try {
     const registration = await sendRegisterRequest(registerUrl, planetToken, name, freshHabitatUuid);
-    await writeRegistration(registration);
-    await hydrateModules(registration.habitatId, parseStarterModules(registration.raw));
+    const starterModules = parseStarterModules(registration.raw);
+    const starterHumans = registration.starterHumans;
+    const expectedStarterModuleCount = getStarterModulesCount(registration.raw);
+    const expectedStarterHumanCount = getStarterHumansCount(registration.raw);
+
+    if (starterModules.length !== expectedStarterModuleCount) {
+      throw new Error("Could not persist all starter modules from the registration response.");
+    }
+
+    if (starterHumans.length !== expectedStarterHumanCount) {
+      throw new Error("Could not persist all starter humans from the registration response.");
+    }
+
+    try {
+      writeRegistration(registration);
+      await hydrateModules(registration.habitatId, starterModules);
+      await hydrateHumans(registration.habitatId, starterHumans);
+    } catch (error) {
+      await rollbackRegistrationPersistence();
+      throw error;
+    }
+
     return registration;
   } catch (error) {
     throw new Error(

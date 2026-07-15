@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { app } from "../src/state-api";
+import { hydrateHumans } from "../src/human-storage";
 
 let originalCwd = "";
 let workspaceDir = "";
@@ -35,6 +36,30 @@ afterEach(async () => {
 });
 
 describe("state api", () => {
+  test("returns persisted humans through the local habitat api", async () => {
+    await hydrateHumans("habitat-1", [
+      {
+        id: "human-1",
+        displayName: "Henry",
+        locationModuleId: "command-module-1",
+      },
+    ]);
+
+    const response = await app.fetch(new Request("http://localhost/humans"));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      habitatId: "habitat-1",
+      humans: [
+        {
+          id: "human-1",
+          displayName: "Henry",
+          locationModuleId: "command-module-1",
+        },
+      ],
+    });
+  });
+
   test("returns a friendly not-found response when no registration exists", async () => {
     const response = await app.fetch(new Request("http://localhost/registration"));
 

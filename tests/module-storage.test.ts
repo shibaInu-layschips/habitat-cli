@@ -6,6 +6,7 @@ import {
   buildModuleSlug,
   createModule,
   deleteModule,
+  findStarterModuleByCapability,
   getModule,
   hydrateModules,
   listModules,
@@ -30,15 +31,23 @@ const sampleModule: HabitatModule = {
 
 let originalCwd = "";
 let workspaceDir = "";
+let originalHabitatApiBaseUrl: string | undefined;
+let originalBackendRuntime: string | undefined;
 
 beforeEach(async () => {
   originalCwd = process.cwd();
+  originalHabitatApiBaseUrl = process.env.HABITAT_API_BASE_URL;
+  originalBackendRuntime = process.env.HABITAT_BACKEND_RUNTIME;
   workspaceDir = await mkdtemp(join(tmpdir(), "habitat-modules-"));
   await mkdir(join(workspaceDir, ".habitat"), { recursive: true });
   process.chdir(workspaceDir);
+  process.env.HABITAT_BACKEND_RUNTIME = "1";
+  delete process.env.HABITAT_API_BASE_URL;
 });
 
 afterEach(async () => {
+  process.env.HABITAT_API_BASE_URL = originalHabitatApiBaseUrl;
+  process.env.HABITAT_BACKEND_RUNTIME = originalBackendRuntime;
   process.chdir(originalCwd);
   await rm(workspaceDir, { recursive: true, force: true });
 });
@@ -94,6 +103,36 @@ describe("module storage", () => {
 
     expect(parsedModules[0]?.slug).toBe("command-module-1");
     expect(parsedModules[1]?.slug).toBe("command-module-2");
+  });
+
+  test("finds the starter suitport module by capability from the registration response", () => {
+    const suitportModule = findStarterModuleByCapability(
+      {
+        starterModules: [
+          {
+            ...sampleModule,
+            id: "habitat_1_command_module_1",
+            capabilities: ["habitat-command"],
+          },
+          {
+            id: "habitat_1_basic_suitport_1",
+            blueprintId: "basic-suitport",
+            displayName: "Basic Suitport",
+            connectedTo: ["habitat_1_life_support_1"],
+            runtimeAttributes: {
+              health: 100,
+              status: "online",
+              evaStatus: "docked",
+            },
+            capabilities: ["limited-eva", "suitport-access"],
+          },
+        ],
+      },
+      "suitport-access",
+    );
+
+    expect(suitportModule?.id).toBe("habitat_1_basic_suitport_1");
+    expect(suitportModule?.blueprintId).toBe("basic-suitport");
   });
 
   test("builds short slugs from blueprint ids", () => {
