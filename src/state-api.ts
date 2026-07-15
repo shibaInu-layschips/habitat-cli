@@ -495,14 +495,10 @@ app.get("/catalog/resources", async (c) => {
 });
 
 app.get("/world/scan", async (c) => {
-  const x = parseIntegerQuery(c.req.query("x"));
-  const y = parseIntegerQuery(c.req.query("y"));
   const sensorStrength = parseIntegerQuery(c.req.query("sensorStrength"));
   const radius = parseIntegerQuery(c.req.query("radius"));
 
   if (
-    x === null ||
-    y === null ||
     sensorStrength === null ||
     sensorStrength < 0 ||
     sensorStrength > 100 ||
@@ -510,20 +506,24 @@ app.get("/world/scan", async (c) => {
     radius < 0 ||
     radius > 5
   ) {
-    return respondJson(c, { error: "x, y, sensorStrength, and radius must be valid numbers." }, "world scan query invalid", 400);
+    return respondJson(c, { error: "sensorStrength and radius must be valid numbers." }, "world scan query invalid", 400);
   }
 
-  const registration = await readRegistration();
+  const eva = await readEvaState();
 
-  if (!registration?.habitatId) {
-    return respondJson(c, { error: "This habitat must be registered before scanning the world." }, "world scan unavailable", 409);
+  if (!eva.deployedHumanId) {
+    return respondJson(c, { error: "A human must be deployed before scanning the world." }, "world scan unavailable", 409);
+  }
+
+  if (!eva.habitatId) {
+    return respondJson(c, { error: "The deployed explorer is not associated with a registered Habitat." }, "world scan unavailable", 409);
   }
 
   try {
     const scan = await readWorldScan({
-      habitatId: registration.habitatId,
-      x,
-      y,
+      habitatId: eva.habitatId,
+      x: eva.x,
+      y: eva.y,
       sensorStrength,
       radius,
     });

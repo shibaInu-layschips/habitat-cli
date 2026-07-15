@@ -394,7 +394,7 @@ Quick start:
   habitat --help
   habitat register --name "Apollo 2.0"
   habitat status
-  habitat scan --x 3 --y -2 --strength 60
+  habitat scan --strength 100 --radius 0
   habitat blueprint list
   habitat blueprint show basic-battery
   habitat resource list
@@ -463,28 +463,12 @@ Environment:
   program
     .command("scan")
     .description("Scan nearby world resources through the backend.")
-    .requiredOption("--x <integer>", "current x coordinate")
-    .requiredOption("--y <integer>", "current y coordinate")
     .requiredOption("--strength <0-100>", "effective sensor strength")
     .option("--radius <0-5>", "scan radius", "0")
     .option("--json", "print the complete JSON response")
     .action(async (options) => {
-      const x = parseIntegerOption(options.x);
-      const y = parseIntegerOption(options.y);
       const strength = parseSensorStrength(options.strength);
       const radius = parseScanRadius(options.radius);
-
-      if (x === null) {
-        console.error("x must be an integer.");
-        process.exitCode = 1;
-        return;
-      }
-
-      if (y === null) {
-        console.error("y must be an integer.");
-        process.exitCode = 1;
-        return;
-      }
 
       if (strength === null) {
         console.error("strength must be an integer between 0 and 100.");
@@ -500,7 +484,7 @@ Environment:
 
       try {
         const response = await getHabitatApiJson<unknown>(
-          `/world/scan?x=${encodeURIComponent(String(x))}&y=${encodeURIComponent(String(y))}&sensorStrength=${encodeURIComponent(String(strength))}&radius=${encodeURIComponent(String(radius))}`,
+          `/world/scan?sensorStrength=${encodeURIComponent(String(strength))}&radius=${encodeURIComponent(String(radius))}`,
         );
 
         if (options.json) {

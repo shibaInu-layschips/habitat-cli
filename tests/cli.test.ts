@@ -1923,7 +1923,7 @@ describe("habitat CLI", () => {
 
   test("shows one-tile scan details through the local habitat api", async () => {
     globalThis.fetch = createApiAwareFetch(async (input, init) => {
-      expect(String(input)).toBe("http://localhost:8787/world/scan?x=3&y=-2&sensorStrength=60&radius=0");
+      expect(String(input)).toBe("http://localhost:8787/world/scan?sensorStrength=60&radius=0");
       expect(init?.method).toBe("GET");
 
       return new Response(
@@ -1955,7 +1955,7 @@ describe("habitat CLI", () => {
       );
     });
 
-    await runHabitat(["bun", "habitat", "scan", "--x", "3", "--y", "-2", "--strength", "60"]);
+    await runHabitat(["bun", "habitat", "scan", "--strength", "60"]);
 
     const joinedOutput = output.join("\n");
     expect(joinedOutput).toContain("World Scan");
@@ -1971,7 +1971,7 @@ describe("habitat CLI", () => {
 
   test("shows one summary row per tile for a larger-radius scan", async () => {
     globalThis.fetch = createApiAwareFetch(async (input, init) => {
-      expect(String(input)).toBe("http://localhost:8787/world/scan?x=3&y=-2&sensorStrength=60&radius=2");
+      expect(String(input)).toBe("http://localhost:8787/world/scan?sensorStrength=60&radius=2");
       expect(init?.method).toBe("GET");
 
       return new Response(
@@ -2017,7 +2017,7 @@ describe("habitat CLI", () => {
       );
     });
 
-    await runHabitat(["bun", "habitat", "scan", "--x", "3", "--y", "-2", "--strength", "60", "--radius", "2"]);
+    await runHabitat(["bun", "habitat", "scan", "--strength", "60", "--radius", "2"]);
 
     const joinedOutput = output.join("\n");
     expect(joinedOutput).toContain("World Scan Summary");
@@ -2054,7 +2054,7 @@ describe("habitat CLI", () => {
     };
 
     globalThis.fetch = createApiAwareFetch(async (input) => {
-      expect(String(input)).toBe("http://localhost:8787/world/scan?x=3&y=-2&sensorStrength=60&radius=0");
+      expect(String(input)).toBe("http://localhost:8787/world/scan?sensorStrength=60&radius=0");
 
       return new Response(JSON.stringify(scanResponse), {
         status: 200,
@@ -2062,7 +2062,7 @@ describe("habitat CLI", () => {
       });
     });
 
-    await runHabitat(["bun", "habitat", "scan", "--x", "3", "--y", "-2", "--strength", "60", "--json"]);
+    await runHabitat(["bun", "habitat", "scan", "--strength", "60", "--json"]);
 
     expect(output.join("\n")).toContain(JSON.stringify(scanResponse, null, 2));
     expect(errors).toEqual([]);

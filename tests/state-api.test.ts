@@ -6,6 +6,7 @@ import { app } from "../src/state-api";
 import { hydrateHumans } from "../src/human-storage";
 import { hydrateModules } from "../src/module-storage";
 import { readEvaState } from "../src/eva-state";
+import { writeStateBlob } from "../src/sqlite-storage";
 
 let originalCwd = "";
 let workspaceDir = "";
@@ -756,8 +757,17 @@ describe("state api", () => {
       }),
     );
 
+    writeStateBlob("eva", JSON.stringify({
+      habitatId: "habitat-1",
+      deployedHumanId: "human-1",
+      x: 12,
+      y: 34,
+      carriedResources: {},
+      maxCarryingCapacityKg: 20,
+    }));
+
     const response = await app.fetch(
-      new Request("http://localhost/world/scan?x=12&y=34&sensorStrength=5&radius=4"),
+      new Request("http://localhost/world/scan?sensorStrength=5&radius=4"),
     );
 
     expect(response.status).toBe(200);
@@ -783,13 +793,29 @@ describe("state api", () => {
     };
 
     const response = await app.fetch(
-      new Request("http://localhost/world/scan?x=12&y=nope&sensorStrength=0&radius="),
+      new Request("http://localhost/world/scan?sensorStrength=nope&radius="),
     );
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "x, y, sensorStrength, and radius must be valid numbers.",
+      error: "sensorStrength and radius must be valid numbers.",
     });
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("uses the saved EVA position and rejects scans without a deployed human", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = async () => {
+      fetchCalls += 1;
+      throw new Error("Unexpected network call");
+    };
+
+    const response = await app.fetch(
+      new Request("http://localhost/world/scan?sensorStrength=100&radius=0"),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "A human must be deployed before scanning the world." });
     expect(fetchCalls).toBe(0);
   });
 
