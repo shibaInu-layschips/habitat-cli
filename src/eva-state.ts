@@ -6,6 +6,7 @@ import type { EvaState, HabitatModule } from "./types";
 
 const EVA_STATE_NAMESPACE = "eva";
 const SUITPORT_CAPABILITY = "suitport-access";
+const DEFAULT_EVA_CARRYING_CAPACITY_KG = 20;
 
 function defaultEvaState(): EvaState {
   return {
@@ -95,7 +96,7 @@ function getMaxCarryingCapacityKg(module: HabitatModule) {
     }
   }
 
-  return null;
+  return DEFAULT_EVA_CARRYING_CAPACITY_KG;
 }
 
 export async function deployExplorer(humanId: string) {
@@ -123,10 +124,6 @@ export async function deployExplorer(humanId: string) {
   }
 
   const maxCarryingCapacityKg = getMaxCarryingCapacityKg(suitport);
-
-  if (maxCarryingCapacityKg === null) {
-    throw new Error("The active suitport does not provide a carrying capacity in kilograms.");
-  }
 
   const nextState: EvaState = {
     habitatId: humanState.habitatId,

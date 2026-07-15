@@ -19,7 +19,7 @@ const modules: HabitatModule[] = [
     blueprintId: "basic-suitport",
     displayName: "Basic Suitport",
     connectedTo: [],
-    runtimeAttributes: { status: "active", maxCarryingCapacityKg: 25 },
+    runtimeAttributes: { status: "active" },
     capabilities: ["suitport-access"],
   },
   {
@@ -71,7 +71,7 @@ describe("eva state", () => {
       deployedHumanId: "human-1",
       x: 0,
       y: 0,
-      maxCarryingCapacityKg: 25,
+      maxCarryingCapacityKg: 20,
     });
   });
 
