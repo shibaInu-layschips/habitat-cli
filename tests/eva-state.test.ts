@@ -104,6 +104,9 @@ describe("eva state", () => {
     globalThis.fetch = async (input, init) => {
       expect(String(input)).toBe("https://planet.turingguild.com/world/collect");
       expect(init?.method).toBe("POST");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer test-token");
+      expect(headers.get("Content-Type")).toBe("application/json");
       expect(JSON.parse(String(init?.body))).toEqual({
         habitatId: "habitat-1",
         x: 0,
@@ -118,8 +121,17 @@ describe("eva state", () => {
   });
 
   test("rejects collection without an explorer or enough carrying capacity", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ resourceType: "ferrite", quantityKg: 1 }), { status: 200 });
+    };
+
     await expect(collectExplorer(1)).rejects.toThrow("No human is currently deployed.");
+    expect(fetchCalls).toBe(0);
+
     await deployExplorer("human-1");
     await expect(collectExplorer(21)).rejects.toThrow("carrying capacity");
+    expect(fetchCalls).toBe(0);
   });
 });
