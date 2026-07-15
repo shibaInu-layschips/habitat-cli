@@ -1,5 +1,7 @@
 export type ModuleRuntimeAttributes = Record<string, unknown>;
 
+export type JsonSchemaLike = Record<string, unknown>;
+
 export type HabitatModule = {
   id: string;
   slug: string;
@@ -8,6 +10,21 @@ export type HabitatModule = {
   connectedTo: string[];
   runtimeAttributes: ModuleRuntimeAttributes;
   capabilities: string[];
+};
+
+export type HabitatHuman = {
+  id: string;
+  displayName: string;
+  locationModuleId: string;
+};
+
+export type AlertContract = {
+  schemaVersion: string;
+  schema: JsonSchemaLike;
+};
+
+export type RegistrationContracts = {
+  alerts: AlertContract;
 };
 
 export type HabitatModuleState = {

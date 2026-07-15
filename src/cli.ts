@@ -35,6 +35,7 @@ import {
   putHabitatApiJson,
   HabitatApiError,
   type HabitatInventoryStateResponse,
+  type HabitatHumanStateResponse,
   type HabitatModuleDeleteResponse,
   type HabitatModuleMutationResponse,
   type HabitatModuleResponse,
@@ -116,6 +117,11 @@ async function deleteRemoteModule(moduleId: string) {
 async function readRemoteInventoryItems() {
   const response = await getHabitatApiJson<HabitatInventoryStateResponse>("/inventory");
   return response.items;
+}
+
+async function readRemoteHumans() {
+  const response = await getHabitatApiJson<HabitatHumanStateResponse>("/humans");
+  return response.humans;
 }
 
 async function addRemoteInventoryItem(resourceType: string, quantity: number) {
@@ -329,6 +335,7 @@ Habitat CLI for this lab:
   blueprint   Read the Kepler blueprint catalog
   resource    Read the Kepler resource catalog
   module      Create, inspect, update, and delete local habitat modules
+  human       List and manage habitat humans
   inventory   Inspect local habitat inventory
   construction Inspect local construction jobs
   battery     Show battery status
@@ -354,6 +361,7 @@ Quick start:
   habitat resource list
   habitat tick 10
   habitat module list
+  habitat human list
   habitat module info workshop-fabricator-1
   habitat module workshop-fabricator-1 status
   habitat inventory list
@@ -534,6 +542,10 @@ Environment:
     .command("module")
     .description("Manage local habitat module records.");
 
+  const humanCommand = program
+    .command("human")
+    .description("Inspect and manage habitat humans.");
+
   const blueprintCommand = program
     .command("blueprint")
     .description("Read the blueprint catalog through the backend.");
@@ -545,6 +557,29 @@ Environment:
   const inventoryCommand = program
     .command("inventory")
     .description("Inspect local habitat inventory.");
+
+  humanCommand
+    .command("list")
+    .description("List humans and their assigned habitat modules.")
+    .action(async () => {
+      try {
+        const humans = await readRemoteHumans();
+
+        if (humans.length === 0) {
+          console.log("No humans recorded.");
+          return;
+        }
+
+        console.log("Humans");
+        for (const human of humans) {
+          console.log(`${human.id} | ${human.displayName} | ${human.locationModuleId}`);
+        }
+      } catch (error) {
+        const message = getApiErrorMessage(error, "Unable to read humans.");
+        console.error(message);
+        process.exitCode = 1;
+      }
+    });
 
   const constructionCommand = program
     .command("construction")

@@ -28,6 +28,7 @@ import { listResourceCatalog } from "./kepler-resources";
 import { readSolarIrradianceReading } from "./kepler-irradiance";
 import { readWorldScan } from "./kepler-world-scan";
 import { readSimulationState } from "./power-simulation";
+import { readHumanState } from "./human-storage";
 
 export const app = new Hono();
 
@@ -160,12 +161,13 @@ app.get("/status", async (c) => {
 });
 
 app.get("/state", async (c) => {
-  const [modules, inventory, construction, simulation, registration] = await Promise.all([
+  const [modules, inventory, construction, simulation, registration, humans] = await Promise.all([
     readModuleState(),
     readInventoryState(),
     readConstructionState(),
     readSimulationState(),
     readRegistration(),
+    readHumanState(),
   ]);
 
   return respondJson(c, {
@@ -174,7 +176,13 @@ app.get("/state", async (c) => {
     inventory,
     construction,
     simulation,
+    humans,
   }, "snapshot returned");
+});
+
+app.get("/humans", async (c) => {
+  const state = await readHumanState();
+  return respondJson(c, state, `${state.humans.length} humans`);
 });
 
 app.get("/modules", async (c) => {

@@ -1,7 +1,7 @@
 import type { KeplerBlueprint } from "./kepler-blueprints";
 import type { KeplerResource } from "./kepler-resources";
 import type { SolarIrradianceReading } from "./kepler-irradiance";
-import type { HabitatModule, HabitatModuleState, InventoryState, InventoryItem } from "./types";
+import type { HabitatHuman, HabitatModule, HabitatModuleState, InventoryState, InventoryItem } from "./types";
 
 export type HabitatApiConfig = {
   baseUrl: string;
@@ -64,6 +64,11 @@ export type HabitatModuleMutationResponse = HabitatModuleResponse;
 
 export type HabitatModuleDeleteResponse = {
   deleted: boolean;
+};
+
+export type HabitatHumanStateResponse = {
+  habitatId: string | null;
+  humans: HabitatHuman[];
 };
 
 export type HabitatInventoryStateResponse = InventoryState;
