@@ -7,17 +7,28 @@
     "habitat": "./src/index.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "bun test",
     "server": "bun src/server.ts",
-    "night-watch": "bun lxc-night-watch/run.ts"
+    "night-watch": "bun lxc-night-watch/run.ts",
+    "ui:dev": "vite --config web/vite.config.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "ui:build": "vite build --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "ui:preview": "vite preview --config web/vite.config.ts"
   },
   "dependencies": {
     "commander": "^14.0.0",
-    "hono": "^4.12.29"
+    "hono": "^4.12.29",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/bun": "^1.2.20",
-    "typescript": "^5.9.2"
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "^5.9.2",
+    "vite": "^8.1.4"
   }
 }

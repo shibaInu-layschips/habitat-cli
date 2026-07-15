@@ -273,7 +273,7 @@ async function advanceConstructionJobs(ticksApplied: number) {
   return completedJobs;
 }
 
-export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSummary> {
+export async function runPowerTicks(ticksRequested: number, signal?: AbortSignal): Promise<PowerTickSummary> {
   if (!Number.isInteger(ticksRequested) || ticksRequested < 1) {
     throw new Error("Tick count must be a positive integer.");
   }
@@ -316,11 +316,19 @@ export async function runPowerTicks(ticksRequested: number): Promise<PowerTickSu
   let batteryEnergyAfterKwh = batteryEnergyBeforeKwh;
 
   for (let index = 0; index < ticksRequested; index += 1) {
+    if (signal?.aborted) {
+      throw new DOMException("Tick simulation was stopped.", "AbortError");
+    }
+
     simulationState.currentTick += 1;
     batteryEnergyAfterKwh = Math.min(
       batteryCapacityKwh,
       Math.max(0, batteryEnergyAfterKwh - drainPerTickKwh) + chargePerTickKwh,
     );
+
+    if ((index + 1) % 1000 === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   batteryEnergyAfterKwh = roundKwh(batteryEnergyAfterKwh);

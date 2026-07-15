@@ -12,6 +12,7 @@ let originalCwd = "";
 let workspaceDir = "";
 let originalBaseUrl: string | undefined;
 let originalPlanetToken: string | undefined;
+let originalBackendRuntime: string | undefined;
 let originalFetch: typeof globalThis.fetch;
 let originalLog: typeof console.log;
 
@@ -19,6 +20,7 @@ beforeEach(async () => {
   originalCwd = process.cwd();
   originalBaseUrl = process.env.KEPLER_BASE_URL;
   originalPlanetToken = process.env.KEPLER_PLANET_TOKEN;
+  originalBackendRuntime = process.env.HABITAT_BACKEND_RUNTIME;
   originalFetch = globalThis.fetch;
   originalLog = console.log;
 
@@ -27,12 +29,14 @@ beforeEach(async () => {
   process.chdir(workspaceDir);
   process.env.KEPLER_BASE_URL = "https://planet.turingguild.com";
   process.env.KEPLER_PLANET_TOKEN = "test-token";
+  process.env.HABITAT_BACKEND_RUNTIME = "1";
 });
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
   process.env.KEPLER_BASE_URL = originalBaseUrl;
   process.env.KEPLER_PLANET_TOKEN = originalPlanetToken;
+  process.env.HABITAT_BACKEND_RUNTIME = originalBackendRuntime;
   console.log = originalLog;
   process.chdir(originalCwd);
   await rm(workspaceDir, { recursive: true, force: true });
@@ -576,6 +580,82 @@ describe("state api", () => {
     );
     expect(deleteModuleResponse.status).toBe(200);
     expect(await deleteModuleResponse.json()).toEqual({ deleted: true });
+  });
+
+  test("advances simulation ticks through the backend", async () => {
+    globalThis.fetch = async (input) => {
+      if (String(input) === "https://planet.turingguild.com/world/solar-irradiance") {
+        return new Response(
+          JSON.stringify({
+            solarIrradiance: {
+              wPerM2: 900,
+              condition: "clear",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    };
+
+    await hydrateModules("habitat-1", [
+      {
+        id: "battery-1",
+        slug: "basic-battery-1",
+        blueprintId: "basic-battery",
+        displayName: "Basic Battery",
+        connectedTo: [],
+        runtimeAttributes: {
+          status: "online",
+          currentEnergyKwh: 100,
+          energyStorageKwh: 200,
+          powerDrawKw: {
+            online: 12,
+          },
+        },
+        capabilities: ["power-storage"],
+      },
+      {
+        id: "solar-1",
+        slug: "small-solar-array-1",
+        blueprintId: "small-solar-array",
+        displayName: "Small Solar Array",
+        connectedTo: [],
+        runtimeAttributes: {
+          status: "online",
+          powerGenerationKw: 6,
+          powerDrawKw: {
+            online: 0,
+          },
+        },
+        capabilities: ["solar-generation"],
+      },
+    ]);
+
+    const response = await app.fetch(
+      new Request("http://localhost/simulation/ticks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticks: 60 }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      summary: {
+        ticksRequested: 60,
+        ticksApplied: 60,
+        startTick: 0,
+        endTick: 60,
+        totalPowerDrawKw: 12,
+        solarCondition: "clear",
+      },
+    });
+
+    const simulationResponse = await app.fetch(new Request("http://localhost/simulation"));
+    expect(simulationResponse.status).toBe(200);
+    expect(await simulationResponse.json()).toEqual({ currentTick: 60 });
   });
 
   test("proxies blueprint, resource, and solar reads through the backend", async () => {

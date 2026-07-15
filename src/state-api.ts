@@ -530,7 +530,7 @@ app.post("/simulation/ticks", async (c) => {
   }
 
   try {
-    const summary = await runPowerTicks(ticks);
+    const summary = await runPowerTicks(ticks, c.req.raw.signal);
     return respondJson(c, { summary }, `advanced ${summary.ticksApplied} ticks`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to advance simulation ticks.";
