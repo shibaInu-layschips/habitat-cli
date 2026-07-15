@@ -119,9 +119,8 @@ async function readRemoteInventoryItems() {
   return response.items;
 }
 
-async function readRemoteHumans() {
-  const response = await getHabitatApiJson<HabitatHumanStateResponse>("/humans");
-  return response.humans;
+async function readRemoteHumanState() {
+  return await getHabitatApiJson<HabitatHumanStateResponse>("/humans");
 }
 
 async function addRemoteInventoryItem(resourceType: string, quantity: number) {
@@ -561,9 +560,17 @@ Environment:
   humanCommand
     .command("list")
     .description("List humans and their assigned habitat modules.")
-    .action(async () => {
+    .option("--json", "print the complete JSON response")
+    .action(async (options) => {
       try {
-        const humans = await readRemoteHumans();
+        const humanState = await readRemoteHumanState();
+
+        if (options.json) {
+          console.log(JSON.stringify(humanState, null, 2));
+          return;
+        }
+
+        const humans = humanState.humans;
 
         if (humans.length === 0) {
           console.log("No humans recorded.");

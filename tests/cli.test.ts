@@ -742,13 +742,34 @@ describe("habitat CLI", () => {
       ],
     };
 
-    const result = await captureHabitatRun(["node", "habitat", "human", "list"]);
+    const firstResult = await captureHabitatRun(["node", "habitat", "human", "list"]);
+    const secondResult = await captureHabitatRun(["node", "habitat", "human", "list"]);
 
-    expect(result.errors).toEqual([]);
-    expect(result.output).toEqual([
+    expect(firstResult.errors).toEqual([]);
+    expect(secondResult.errors).toEqual([]);
+    expect(firstResult.output).toEqual([
       "Humans",
       "human-1 | Henry | command-module-1",
     ]);
+    expect(secondResult.output).toEqual(firstResult.output);
+  });
+
+  test("prints humans as JSON for scripts", async () => {
+    apiHumanState = {
+      habitatId: "habitat-1",
+      humans: [
+        {
+          id: "human-1",
+          displayName: "Henry",
+          locationModuleId: "command-module-1",
+        },
+      ],
+    };
+
+    const result = await captureHabitatRun(["node", "habitat", "human", "list", "--json"]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.output.join("\n")).toBe(JSON.stringify(apiHumanState, null, 2));
   });
 
   test("shows a friendly empty state when no humans are recorded", async () => {
