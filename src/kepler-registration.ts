@@ -290,6 +290,7 @@ export async function readRegistration(): Promise<KeplerRegistration | null> {
 
 function clearRegistration() {
   deleteStateBlob(REGISTRATION_STATE_NAMESPACE);
+  deleteStateBlob("alerts");
 }
 
 async function rollbackRegistrationPersistence() {
