@@ -463,6 +463,15 @@ describe("habitat CLI", () => {
                   registeredAt: "2026-07-10T12:00:00.000Z",
                   status: "registered",
                   registrationId: "registration-1",
+                  streamUrl: "wss://planet.turingguild.com/planet/stream",
+                  apiToken: "habitat-stream-token",
+                  stream: {
+                    protocolVersion: "1.0",
+                    subscriptions: ["ticks"],
+                    currentTick: 800,
+                    ticksPerPulse: 1,
+                    status: "running",
+                  },
                 }
               : null,
           }),
@@ -484,6 +493,13 @@ describe("habitat CLI", () => {
     await runHabitat(["bun", "habitat", "register", "--name", "Artemis Ridge"]);
     expect(output.join("\n")).toContain('Registered habitat "Artemis Ridge".');
     expect(output.join("\n")).toContain("Registration: Registered as \"Artemis Ridge\"");
+    expect(output.join("\n")).toContain("Habitat ID: habitat-1");
+    expect(output.join("\n")).toContain("Stream URL: wss://planet.turingguild.com/planet/stream");
+    expect(output.join("\n")).toContain("Stream API Token: habitat-stream-token");
+    expect(output.join("\n")).toContain("Stream Subscriptions: ticks");
+    expect(output.join("\n")).toContain("Planet Clock Tick At Registration: 800");
+    expect(output.join("\n")).toContain("Planet Ticks Per Pulse: 1");
+    expect(output.join("\n")).toContain("Planet Clock Status At Registration: running");
     expect(errors).toEqual([]);
     expect(process.exitCode).toBeUndefined();
 
@@ -507,6 +523,61 @@ describe("habitat CLI", () => {
     expect(output.join("\n")).toContain("Removed habitat registration. The habitat is now ready to register again.");
     expect(errors).toEqual([]);
     expect(process.exitCode).toBeUndefined();
+  });
+
+  test("shows clock-specific status through the local habitat api", async () => {
+    globalThis.fetch = createApiAwareFetch(async (input) => {
+      expect(String(input)).toBe("http://localhost:8787/clock/status");
+      return new Response(JSON.stringify({
+        clock: {
+          mode: "listening",
+          streamStatus: "error",
+          lastKeplerTick: 800,
+          lastAdvancedBy: 1,
+          lastConnectedAt: "2026-07-16T12:00:00.000Z",
+          lastMessageAt: "2026-07-16T12:00:01.000Z",
+          lastConnectionError: "connection refused",
+        },
+        mode: "kepler",
+        listening: true,
+        manualTicksAllowed: false,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await runHabitat(["bun", "habitat", "clock", "status"]);
+    const joined = output.join("\n");
+    expect(joined).toContain("Mode: kepler");
+    expect(joined).toContain("Kepler Listening: on");
+    expect(joined).toContain("Manual Ticks Allowed: no");
+    expect(joined).toContain("Connection: error");
+    expect(joined).toContain("Most Recent Kepler Tick: 800");
+    expect(joined).toContain("Last Connection Error: connection refused");
+  });
+
+  test("prints habitat status as JSON including stream credentials and metadata", async () => {
+    globalThis.fetch = createApiAwareFetch(async (input) => {
+      expect(String(input)).toBe("http://localhost:8787/status");
+      return new Response(JSON.stringify({
+        currentTick: 900,
+        moduleCount: 4,
+        registration: {
+          habitatId: "habitat-1",
+          displayName: "Artemis Ridge",
+          registeredAt: "2026-07-15T14:30:00.000Z",
+          status: "registered",
+          registrationId: "registration-1",
+          streamUrl: "wss://planet.turingguild.com/planet/stream",
+          apiToken: "habitat-stream-token",
+          stream: { protocolVersion: "1.0", subscriptions: ["ticks"], currentTick: 800, ticksPerPulse: 1, status: "running" },
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await runHabitat(["bun", "habitat", "status", "--json"]);
+    const parsed = JSON.parse(output[0] ?? "{}");
+    expect(parsed.registration.apiToken).toBe("habitat-stream-token");
+    expect(parsed.registration.streamUrl).toBe("wss://planet.turingguild.com/planet/stream");
+    expect(parsed.registration.stream.subscriptions).toEqual(["ticks"]);
   });
 
   test("sets one module status and prints the power draw for that state", async () => {

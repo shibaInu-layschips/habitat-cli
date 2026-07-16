@@ -7,6 +7,8 @@ import { hydrateHumans } from "../src/human-storage";
 import { hydrateModules } from "../src/module-storage";
 import { readEvaState } from "../src/eva-state";
 import { writeStateBlob } from "../src/sqlite-storage";
+import { defaultClockState, readClockState, writeClockState } from "../src/clock-state";
+import { setWebSocketConstructor, resetClockWatchNotices, startKeplerStream, stopKeplerStream } from "../src/kepler-stream";
 
 let originalCwd = "";
 let workspaceDir = "";
@@ -33,6 +35,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await stopKeplerStream();
+  setWebSocketConstructor(WebSocket);
+  resetClockWatchNotices();
+  writeClockState(defaultClockState());
   globalThis.fetch = originalFetch;
   process.env.KEPLER_BASE_URL = originalBaseUrl;
   process.env.KEPLER_PLANET_TOKEN = originalPlanetToken;
@@ -43,6 +49,105 @@ afterEach(async () => {
 });
 
 describe("state api", () => {
+  test("reports the persisted clock status", async () => {
+    writeClockState({ ...defaultClockState(), mode: "listening", streamStatus: "connected", lastKeplerTick: 12 });
+
+    const response = await app.fetch(new Request("http://localhost/clock/status"));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      clock: readClockState(),
+      mode: "kepler",
+      listening: true,
+      manualTicksAllowed: false,
+    });
+  });
+
+  test("rejects listening when registration stream data is incomplete and leaves manual mode", async () => {
+    const response = await app.fetch(new Request("http://localhost/clock/listen/on", { method: "POST" }));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Saved registration does not contain complete Kepler stream details." });
+    expect(readClockState().mode).toBe("manual");
+  });
+
+  test("turns listening on and off through the stream lifecycle", async () => {
+    writeStateBlob("registration", JSON.stringify({ habitatName: "Apollo", registeredAt: "now", status: "registered", registerUrl: "https://planet.turingguild.com/habitats/register", habitatId: "h-1", apiToken: "token", streamUrl: "wss://clock", stream: { protocolVersion: "1", subscriptions: ["ticks"], currentTick: 12, ticksPerPulse: 1, status: "ready" } }));
+    class FakeSocket {
+      handlers = new Map<string, (event: any) => void>();
+      send() {}
+      close() { this.handlers.get("close")?.({}); }
+      addEventListener(type: string, listener: (event: any) => void) { this.handlers.set(type, listener); }
+    }
+    setWebSocketConstructor(FakeSocket as any);
+
+    const onResponse = await app.fetch(new Request("http://localhost/clock/listen/on", { method: "POST" }));
+    expect(onResponse.status).toBe(200);
+    expect((await onResponse.json()).clock.mode).toBe("listening");
+
+    const offResponse = await app.fetch(new Request("http://localhost/clock/listen/off", { method: "POST" }));
+    expect(offResponse.status).toBe(200);
+    expect((await offResponse.json()).clock.mode).toBe("manual");
+  });
+
+  test("rejects listening when current registration becomes incomplete despite an existing socket", async () => {
+    writeStateBlob("registration", JSON.stringify({
+      habitatName: "Apollo",
+      registeredAt: "now",
+      status: "registered",
+      registerUrl: "https://planet.turingguild.com/habitats/register",
+      habitatId: "h-1",
+      apiToken: "token",
+      streamUrl: "wss://clock",
+      stream: { protocolVersion: "1", subscriptions: ["ticks"], currentTick: 12, ticksPerPulse: 1, status: "ready" },
+    }));
+    class FakeSocket {
+      handlers = new Map<string, (event: any) => void>();
+      send() {}
+      close() { this.handlers.get("close")?.({}); }
+      addEventListener(type: string, listener: (event: any) => void) { this.handlers.set(type, listener); }
+    }
+    setWebSocketConstructor(FakeSocket as any);
+    expect((await app.fetch(new Request("http://localhost/clock/listen/on", { method: "POST" }))).status).toBe(200);
+
+    writeStateBlob("registration", JSON.stringify({ habitatName: "Apollo", registeredAt: "now", status: "registered", habitatId: "h-1", apiToken: "token" }));
+    const response = await app.fetch(new Request("http://localhost/clock/listen/on", { method: "POST" }));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Saved registration does not contain complete Kepler stream details." });
+  });
+
+  test("returns only backend-captured clock notices from watch", async () => {
+    resetClockWatchNotices();
+    const response = await app.fetch(new Request("http://localhost/clock/watch"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ notices: [] });
+  });
+
+  test("watch does not construct a WebSocket or fetch upstream", async () => {
+    let constructed = false;
+    setWebSocketConstructor((() => { constructed = true; }) as any);
+    globalThis.fetch = async () => {
+      throw new Error("watch must not fetch upstream");
+    };
+
+    const response = await app.fetch(new Request("http://localhost/clock/watch"));
+
+    expect(response.status).toBe(200);
+    expect(constructed).toBe(false);
+  });
+
+  test("rejects manual ticks while listening without changing simulation state", async () => {
+    writeClockState({ ...readClockState(), mode: "listening" });
+    const before = await app.fetch(new Request("http://localhost/simulation"));
+    const response = await app.fetch(new Request("http://localhost/simulation/ticks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticks: 60 }) }));
+    const after = await app.fetch(new Request("http://localhost/simulation"));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Manual simulation ticks are unavailable while the Kepler clock is listening." });
+    expect(await after.json()).toEqual(await before.json());
+  });
+
   test("returns persisted humans through the local habitat api", async () => {
     await hydrateHumans("habitat-1", [
       {
@@ -240,6 +345,15 @@ describe("state api", () => {
           status: "registered",
           unregisterUrl: "https://planet.turingguild.com/habitats/register/registration-1",
           starterModules: [],
+          streamUrl: "wss://planet.turingguild.com/habitats/stream",
+          apiToken: "habitat-stream-token",
+          stream: {
+            protocolVersion: "1",
+            subscriptions: ["ticks"],
+            currentTick: 12,
+            ticksPerPulse: 5,
+            status: "ready",
+          },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -259,9 +373,12 @@ describe("state api", () => {
         habitatUuid: expect.any(String),
         habitatId: "habitat-1",
         displayName: "Apollo",
-        apiToken: "test-token",
+        apiToken: "habitat-stream-token",
+        streamUrl: "wss://planet.turingguild.com/habitats/stream",
+        stream: { protocolVersion: "1", subscriptions: ["ticks"], currentTick: 12, ticksPerPulse: 5, status: "ready" },
       },
     });
+    expect(readClockState().mode).toBe("manual");
     expect(logs.join("\n")).toContain('[kepler] POST /habitats/register -> 200');
     expect(logs.join("\n")).toContain('[habitat-api] POST /registration -> registered "Apollo"');
   });
@@ -348,6 +465,52 @@ describe("state api", () => {
 
     const readBackResponse = await app.fetch(new Request("http://localhost/registration"));
     expect(await readBackResponse.json()).toEqual({ registration: null });
+  });
+
+  test("stops the clock stream before starting remote unregister", async () => {
+    writeStateBlob("registration", JSON.stringify({
+      habitatName: "Apollo",
+      registeredAt: "now",
+      registrationId: "registration-1",
+      status: "registered",
+      registerUrl: "https://planet.turingguild.com/habitats/register",
+      habitatId: "habitat-1",
+      apiToken: "token",
+      unregisterUrl: "https://planet.turingguild.com/habitats/register/registration-1",
+      starterHumans: [],
+      alertContract: null,
+      streamUrl: "wss://clock",
+      stream: { protocolVersion: "1", subscriptions: ["ticks"], currentTick: 12, ticksPerPulse: 1, status: "ready" },
+      raw: {},
+    }));
+    class FakeSocket {
+      static instances: FakeSocket[] = [];
+      closed = false;
+      handlers = new Map<string, (event: any) => void>();
+      constructor() { FakeSocket.instances.push(this); }
+      send() {}
+      close() { this.closed = true; this.handlers.get("close")?.({}); }
+      addEventListener(type: string, listener: (event: any) => void) { this.handlers.set(type, listener); }
+    }
+    setWebSocketConstructor(FakeSocket as any);
+    writeClockState({ ...defaultClockState(), mode: "listening" });
+    await startKeplerStream();
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    let deleteStarted = false;
+    globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe("https://planet.turingguild.com/habitats/register/registration-1");
+      expect(init?.method).toBe("DELETE");
+      deleteStarted = true;
+      expect(FakeSocket.instances[0].closed).toBe(true);
+      expect(readClockState().mode).toBe("manual");
+      return new Response(null, { status: 200 });
+    };
+
+    const response = await app.fetch(new Request("http://localhost/registration", { method: "DELETE" }));
+    expect(response.status).toBe(200);
+    expect(deleteStarted).toBe(true);
+    expect(readClockState()).toMatchObject({ mode: "manual", streamStatus: "disconnected" });
   });
 
   test("replaces module state through the backend", async () => {

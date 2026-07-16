@@ -32,6 +32,8 @@ import { readHumanState } from "./human-storage";
 import { moveHuman } from "./human-behavior";
 import { collectExplorer, deployExplorer, dockExplorer, moveExplorer, readEvaState } from "./eva-state";
 import { acknowledgeAlert, listAlerts } from "./habitat-alerts";
+import { defaultClockState, readClockState, writeClockState } from "./clock-state";
+import { getClockWatchNotices, hasCompleteKeplerStreamRegistration, startKeplerStream, stopKeplerStream, subscribeClockEvents } from "./kepler-stream";
 
 export const app = new Hono();
 
@@ -65,6 +67,57 @@ app.use("*", async (c, next) => {
 
 app.get("/health", (c) => respondJson(c, { ok: true }, "ok"));
 
+app.get("/clock/status", (c) => {
+  const clock = readClockState();
+  return respondJson(c, {
+    clock,
+    mode: clock.mode === "listening" ? "kepler" : "manual",
+    listening: clock.mode === "listening",
+    manualTicksAllowed: clock.mode === "manual",
+  }, "clock status");
+});
+app.post("/clock/listen/on", async (c) => {
+  const registration = await readRegistration();
+  if (!hasCompleteKeplerStreamRegistration(registration)) {
+    writeClockState({ ...readClockState(), mode: "manual", streamStatus: "disconnected" });
+    return respondJson(c, { error: "Saved registration does not contain complete Kepler stream details." }, "clock listening rejected", 409);
+  }
+  const clock = readClockState();
+  writeClockState({ ...clock, mode: "listening" });
+  try {
+    await startKeplerStream();
+    return respondJson(c, { clock: readClockState() }, "clock listening enabled");
+  } catch (error) {
+    writeClockState({ ...readClockState(), mode: "manual", streamStatus: "disconnected" });
+    const message = error instanceof Error ? error.message : "Saved registration does not contain complete Kepler stream details.";
+    return respondJson(c, { error: message }, "clock listening rejected", 409);
+  }
+});
+app.post("/clock/listen/off", async (c) => {
+  await stopKeplerStream({ finishTicks: true });
+  writeClockState({ ...readClockState(), mode: "manual" });
+  return respondJson(c, { clock: readClockState() }, "clock listening disabled");
+});
+app.get("/clock/watch", (c) => respondJson(c, { notices: getClockWatchNotices() }, "clock watch notices"));
+app.get("/clock/events", (c) => {
+  const encoder = new TextEncoder();
+  let unsubscribe: () => void = () => undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      unsubscribe = subscribeClockEvents((event) => {
+        controller.enqueue(encoder.encode(`event: planet_tick\ndata: ${JSON.stringify(event)}\n\n`));
+      });
+      c.req.raw.signal.addEventListener("abort", () => {
+        unsubscribe();
+        controller.close();
+      }, { once: true });
+    },
+    cancel() { unsubscribe(); },
+  });
+  setHabitatApiSummary(c, "clock event stream");
+  return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" } });
+});
+
 app.get("/alerts", async (c) => {
   const alerts = await listAlerts();
   return respondJson(c, { alerts }, `${alerts.length} alerts`);
@@ -92,7 +145,9 @@ app.get("/registration", async (c) => {
       habitatUuid: readHabitatUuid(),
       habitatId: registration.habitatId,
       displayName: registration.habitatName,
-      apiToken: process.env.KEPLER_PLANET_TOKEN?.trim() ?? null,
+      apiToken: registration.apiToken,
+      streamUrl: registration.streamUrl,
+      stream: registration.stream,
     },
   }, `registered as "${registration.habitatName}"`);
 });
@@ -124,7 +179,9 @@ app.post("/registration", async (c) => {
         habitatUuid: readHabitatUuid(),
         habitatId: registration.habitatId,
         displayName: registration.habitatName,
-        apiToken: process.env.KEPLER_PLANET_TOKEN?.trim() ?? null,
+        apiToken: registration.apiToken,
+        streamUrl: registration.streamUrl,
+        stream: registration.stream,
       },
     }, `registered "${registration.habitatName}"`);
   } catch (error) {
@@ -135,6 +192,8 @@ app.post("/registration", async (c) => {
 });
 
 app.delete("/registration", async (c) => {
+  await stopKeplerStream();
+  writeClockState(defaultClockState());
   const removed = await unregisterHabitat();
 
   if (!removed) {
@@ -174,6 +233,9 @@ app.get("/status", async (c) => {
       registeredAt: registration.registeredAt,
       status: registration.status,
       registrationId: registration.registrationId,
+      streamUrl: registration.streamUrl,
+      apiToken: registration.apiToken,
+      stream: registration.stream,
     },
   }, `${moduleCount} modules, registered as "${registration.habitatName}"`);
 });
@@ -514,6 +576,9 @@ app.post("/inventory/spend", async (c) => {
 app.get("/construction", async (c) => respondJson(c, await readConstructionState(), "construction snapshot"));
 app.get("/simulation", async (c) => respondJson(c, await readSimulationState(), "simulation snapshot"));
 app.post("/simulation/ticks", async (c) => {
+  if (readClockState().mode === "listening") {
+    return respondJson(c, { error: "Manual simulation ticks are unavailable while the Kepler clock is listening." }, "tick advance rejected", 409);
+  }
   let requestBody: unknown = null;
 
   try {

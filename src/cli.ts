@@ -30,6 +30,7 @@ import { formatWorldScanDetail, formatWorldScanSummary } from "./world-scan-repo
 import { ensureLocalModulesFromRegistration, readRegistration } from "./kepler-registration";
 import {
   getHabitatApiJson,
+  getHabitatApiEventStream,
   deleteHabitatApiJson,
   postHabitatApiJson,
   putHabitatApiJson,
@@ -45,6 +46,7 @@ import {
   type HabitatRegistrationResponse,
   type HabitatResourceListResponse,
   type HabitatStatusResponse,
+  type HabitatClockStatusResponse,
   type HabitatSolarIrradianceResponse,
   type HabitatUnregisterResponse,
 } from "./habitat-api-client";
@@ -315,6 +317,13 @@ function printHabitatStatus(status: HabitatStatusResponse) {
   console.log(`Registration Status: ${status.registration.status}`);
   console.log(`Registered At: ${status.registration.registeredAt}`);
   console.log(`Habitat ID: ${status.registration.habitatId ?? "Unknown"}`);
+  console.log(`Stream URL: ${status.registration.streamUrl ?? "Unknown"}`);
+  console.log(`Stream API Token: ${status.registration.apiToken ?? "Unknown"}`);
+  const stream = status.registration.stream;
+  console.log(`Stream Subscriptions: ${stream?.subscriptions.join(", ") || "Unknown"}`);
+  console.log(`Planet Clock Tick At Registration: ${stream?.currentTick ?? "Unknown"}`);
+  console.log(`Planet Ticks Per Pulse: ${stream?.ticksPerPulse ?? "Unknown"}`);
+  console.log(`Planet Clock Status At Registration: ${stream?.status ?? "Unknown"}`);
 }
 
 async function showLocalModuleById(id: string) {
@@ -378,6 +387,7 @@ export async function runHabitat(argv: string[]) {
     .name("habitat")
     .description("Register this habitat through the backend and inspect habitat status.")
     .version("0.1.0")
+    .option("--jsonl", "emit streaming output as JSON Lines")
     .showHelpAfterError();
 
   program.addHelpText(
@@ -469,14 +479,100 @@ Environment:
   program
     .command("status")
     .description("Show habitat status.")
-    .action(async () => {
+    .option("--json", "print the complete JSON response")
+    .action(async (options) => {
       try {
         const status = await getHabitatApiJson<HabitatStatusResponse>("/status");
-        printHabitatStatus(status);
+        if (options.json) {
+          console.log(JSON.stringify(status));
+        } else {
+          printHabitatStatus(status);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to show habitat status.";
         console.error(message);
         process.exitCode = 1;
+      }
+    });
+
+  const clockCommand = program
+    .command("clock")
+    .description("Inspect and control the Habitat clock.");
+
+  clockCommand
+    .command("status")
+    .description("Show manual or Kepler clock status.")
+    .action(async () => {
+      try {
+        const response = await getHabitatApiJson<HabitatClockStatusResponse>("/clock/status");
+        console.log("Habitat Clock Status");
+        console.log(`Mode: ${response.mode}`);
+        console.log(`Kepler Listening: ${response.listening ? "on" : "off"}`);
+        console.log(`Manual Ticks Allowed: ${response.manualTicksAllowed ? "yes" : "no"}`);
+        console.log(`Connection: ${response.clock.streamStatus}`);
+        console.log(`Most Recent Kepler Tick: ${response.clock.lastKeplerTick ?? "None"}`);
+        console.log(`Last Connection Error: ${response.clock.lastConnectionError ?? "None"}`);
+      } catch (error) {
+        console.error(getApiErrorMessage(error, "Unable to show clock status."));
+        process.exitCode = 1;
+      }
+    });
+
+  const listenCommand = clockCommand
+    .command("listen")
+    .description("Enable or disable Kepler clock listening.");
+
+  for (const [action, description] of [["on", "Enable Kepler clock listening."], ["off", "Disable Kepler clock listening and allow manual ticks."]] as const) {
+    listenCommand
+      .command(action)
+      .description(description)
+      .action(async () => {
+        try {
+          const response = await postHabitatApiJson<HabitatClockStatusResponse>(`/clock/listen/${action}`, {});
+          const clock = response.clock;
+          console.log(`Kepler listening ${action === "on" ? "enabled" : "disabled"}.`);
+          console.log(`Mode: ${clock.mode === "listening" ? "kepler" : "manual"}`);
+          console.log(`Connection: ${clock.streamStatus}`);
+          console.log(`Manual Ticks Allowed: ${clock.mode === "manual" ? "yes" : "no"}`);
+        } catch (error) {
+          console.error(getApiErrorMessage(error, `Unable to turn Kepler listening ${action}.`));
+          process.exitCode = 1;
+        }
+      });
+  }
+
+  clockCommand
+    .command("watch")
+    .description("Watch future Kepler ticks through the local Habitat API.")
+    .action(async () => {
+      const response = await getHabitatApiEventStream("/clock/events");
+      if (!response.ok || !response.body) {
+        console.error(`Unable to watch clock events (${response.status} ${response.statusText}).`);
+        process.exitCode = 1;
+        return;
+      }
+      const jsonl = Boolean(program.opts().jsonl);
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = "";
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += value;
+          const frames = buffer.split("\n\n");
+          buffer = frames.pop() ?? "";
+          for (const frame of frames) {
+            const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+            if (!dataLine) continue;
+            const event = JSON.parse(dataLine.slice(6)) as { tick: number; advancedBy: number; issuedAt: string | null; applied: boolean };
+            if (jsonl) console.log(JSON.stringify(event));
+            else console.log(`planet_tick tick=${event.tick} advancedBy=${event.advancedBy} issuedAt=${event.issuedAt ?? "unknown"} applied=${event.applied ? "yes" : "no"}`);
+          }
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
+      } finally {
+        await reader.cancel();
       }
     });
 

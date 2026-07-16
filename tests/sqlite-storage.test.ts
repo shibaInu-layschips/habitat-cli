@@ -8,6 +8,7 @@ import { hydrateModules, readModuleState } from "../src/module-storage";
 import { hydrateInventory } from "../src/inventory-storage";
 import { writeConstructionState } from "../src/construction-storage";
 import { writeSimulationState } from "../src/power-simulation";
+import { getSqliteDatabase } from "../src/sqlite-storage";
 import type { HabitatModule } from "../src/types";
 
 const sampleModule: HabitatModule = {
@@ -51,6 +52,17 @@ afterEach(async () => {
 });
 
 describe("sqlite storage", () => {
+  test("runs additive migrations without removing existing state", () => {
+    const database = getSqliteDatabase();
+    database.query("INSERT INTO state_blobs (namespace, data) VALUES (?, ?)").run("registration", '{"apiToken":"stream-token"}');
+    database.query("INSERT INTO state_blobs (namespace, data) VALUES (?, ?)").run("modules", '{"modules":[{"id":"module-1"}]}');
+
+    expect(database.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 1 }]);
+    expect(database.query("SELECT data FROM state_blobs WHERE namespace = ?").get("registration")).toEqual({ data: '{"apiToken":"stream-token"}' });
+    expect(database.query("SELECT data FROM state_blobs WHERE namespace = ?").get("modules")).toEqual({ data: '{"modules":[{"id":"module-1"}]}' });
+    expect(database.query("SELECT mode FROM clock_state").get()).toEqual({ mode: "manual" });
+  });
+
   test("stores active state in SQLite instead of JSON files", async () => {
     globalThis.fetch = async (input, init) => {
       expect(String(input)).toBe("https://planet.turingguild.com/habitats/register");

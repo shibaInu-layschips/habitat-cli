@@ -251,11 +251,17 @@ async function completeConstructionJob(job: ConstructionJob) {
   });
 }
 
-async function advanceConstructionJobs(ticksApplied: number) {
+async function advanceConstructionJobs(ticksApplied: number, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new DOMException("Tick simulation was stopped.", "AbortError");
+  }
   const constructionState = await readConstructionState();
   const completedJobs: ConstructionJob[] = [];
 
   for (const job of constructionState.jobs) {
+    if (signal?.aborted) {
+      throw new DOMException("Tick simulation was stopped.", "AbortError");
+    }
     if (job.status !== "active") {
       continue;
     }
@@ -265,6 +271,9 @@ async function advanceConstructionJobs(ticksApplied: number) {
     if (job.remainingBuildTicks === 0) {
       job.status = "complete";
       await completeConstructionJob(job);
+      if (signal?.aborted) {
+        throw new DOMException("Tick simulation was stopped.", "AbortError");
+      }
       completedJobs.push({ ...job });
     }
   }
@@ -343,9 +352,16 @@ export async function runPowerTicks(ticksRequested: number, signal?: AbortSignal
   batteryRuntimeAttributes.energyStorageKwh = batteryCapacityKwh;
   batteryModule.runtimeAttributes = batteryRuntimeAttributes;
 
+  if (signal?.aborted) {
+    throw new DOMException("Tick simulation was stopped.", "AbortError");
+  }
   await writeModuleState(moduleState);
+
+  if (signal?.aborted) {
+    throw new DOMException("Tick simulation was stopped.", "AbortError");
+  }
   await writeSimulationState(simulationState);
-  const completedConstructionJobs = await advanceConstructionJobs(ticksRequested);
+  const completedConstructionJobs = await advanceConstructionJobs(ticksRequested, signal);
 
   return {
     ticksRequested,

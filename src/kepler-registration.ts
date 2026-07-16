@@ -4,6 +4,7 @@ import { logKeplerRequest } from "./kepler-logging";
 import { deleteStateBlob, getSqliteDatabaseFilePath, readStateBlob, writeStateBlob } from "./sqlite-storage";
 import type { AlertContract, HabitatHuman } from "./types";
 import { resetEvaState } from "./eva-state";
+import { defaultClockState, writeClockState } from "./clock-state";
 
 export type KeplerRegistration = {
   habitatName: string;
@@ -15,7 +16,18 @@ export type KeplerRegistration = {
   unregisterUrl: string | null;
   starterHumans: HabitatHuman[];
   alertContract: AlertContract | null;
+  streamUrl: string | null;
+  apiToken: string | null;
+  stream: KeplerStreamMetadata | null;
   raw: unknown;
+};
+
+export type KeplerStreamMetadata = {
+  protocolVersion: string;
+  subscriptions: string[];
+  currentTick: number;
+  ticksPerPulse: number;
+  status: string;
 };
 
 type KeplerConfig = {
@@ -72,6 +84,31 @@ function asString(value: unknown): string | null {
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return isObject(value) ? value : null;
+}
+
+function parseStreamMetadata(value: unknown): KeplerStreamMetadata | null {
+  const record = asObjectRecord(value);
+  if (
+    !record ||
+    typeof record.protocolVersion !== "string" ||
+    !Array.isArray(record.subscriptions) ||
+    !record.subscriptions.every((item) => typeof item === "string") ||
+    typeof record.currentTick !== "number" ||
+    !Number.isInteger(record.currentTick) ||
+    typeof record.ticksPerPulse !== "number" ||
+    !Number.isInteger(record.ticksPerPulse) ||
+    typeof record.status !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    protocolVersion: record.protocolVersion,
+    subscriptions: [...record.subscriptions],
+    currentTick: record.currentTick,
+    ticksPerPulse: record.ticksPerPulse,
+    status: record.status,
+  };
 }
 
 function findFirstString(value: Record<string, unknown>, keys: string[]) {
@@ -284,6 +321,9 @@ export async function readRegistration(): Promise<KeplerRegistration | null> {
     unregisterUrl: typeof parsed.unregisterUrl === "string" ? parsed.unregisterUrl : null,
     starterHumans: Array.isArray(parsed.starterHumans) ? parsed.starterHumans.map(parseStarterHuman).filter((human): human is HabitatHuman => human !== null) : parseStarterHumans(parsed.raw ?? null),
     alertContract: parseAlertContract(parsed.alertContract ?? null) ?? parseAlertContract(parsed.raw ?? null),
+    streamUrl: typeof parsed.streamUrl === "string" ? parsed.streamUrl : null,
+    apiToken: typeof parsed.apiToken === "string" ? parsed.apiToken : null,
+    stream: parseStreamMetadata(parsed.stream ?? null),
     raw: parsed.raw ?? null,
   };
 }
@@ -419,6 +459,9 @@ function normalizeRegistration(
     unregisterUrl,
     starterHumans: parseStarterHumans(responseBody),
     alertContract: parseAlertContract(responseBody),
+    streamUrl: asString(record.streamUrl),
+    apiToken: asString(record.apiToken),
+    stream: parseStreamMetadata(record.stream),
     raw: responseBody,
   };
 }
@@ -452,6 +495,7 @@ export async function registerHabitat(name: string) {
 
     try {
       writeRegistration(registration);
+      writeClockState(defaultClockState());
       await hydrateModules(registration.habitatId, starterModules);
       await hydrateHumans(registration.habitatId, starterHumans);
     } catch (error) {
@@ -489,6 +533,7 @@ export async function registerHabitat(name: string) {
 
     try {
       writeRegistration(registration);
+      writeClockState(defaultClockState());
       await hydrateModules(registration.habitatId, starterModules);
       await hydrateHumans(registration.habitatId, starterHumans);
     } catch (error) {
@@ -538,6 +583,7 @@ export async function unregisterHabitat() {
         await hydrateModules(null, []);
         await hydrateHumans(null, []);
         await resetEvaState();
+        writeClockState(defaultClockState());
         return true;
       }
 

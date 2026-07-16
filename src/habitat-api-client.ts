@@ -2,6 +2,9 @@ import type { KeplerBlueprint } from "./kepler-blueprints";
 import type { KeplerResource } from "./kepler-resources";
 import type { SolarIrradianceReading } from "./kepler-irradiance";
 import type { HabitatHuman, HabitatModule, HabitatModuleState, InventoryState, InventoryItem } from "./types";
+import type { ClockState } from "./clock-state";
+import type { KeplerStreamMetadata } from "./kepler-registration";
+import type { ClockWatchNotice } from "./kepler-stream";
 
 export type HabitatApiConfig = {
   baseUrl: string;
@@ -15,6 +18,8 @@ export type HabitatRegistrationResponse = {
     habitatId: string | null;
     displayName: string;
     apiToken: string | null;
+    streamUrl: string | null;
+    stream: KeplerStreamMetadata | null;
   } | null;
 };
 
@@ -25,6 +30,9 @@ export type HabitatStatusRegistration = {
   registeredAt: string;
   status: string;
   registrationId: string | null;
+  streamUrl: string | null;
+  apiToken: string | null;
+  stream: KeplerStreamMetadata | null;
 };
 
 export type HabitatStatusResponse = {
@@ -77,6 +85,20 @@ export type HabitatInventoryMutationResponse = {
   item: InventoryItem | null;
   removed: boolean;
 };
+
+export type HabitatClockResponse = { clock: ClockState };
+export type HabitatClockStatusResponse = {
+  clock: ClockState;
+  mode: "manual" | "kepler";
+  listening: boolean;
+  manualTicksAllowed: boolean;
+};
+
+export async function getHabitatApiEventStream(pathname: string) {
+  const baseUrl = process.env.HABITAT_API_BASE_URL?.trim() || "http://localhost:8787";
+  return fetch(new URL(pathname, `${baseUrl.replace(/\/+$/, "")}/`), { headers: { Accept: "text/event-stream" } });
+}
+export type HabitatClockWatchResponse = { notices: ClockWatchNotice[] };
 
 type HabitatApiRequestInit = Omit<RequestInit, "body" | "headers" | "method"> & {
   method?: string;

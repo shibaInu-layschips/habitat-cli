@@ -49,6 +49,15 @@ describe("kepler registration", () => {
         JSON.stringify({
           habitatId: "habitat-1",
           status: "registered",
+          streamUrl: "wss://planet.turingguild.com/habitats/stream",
+          apiToken: "habitat-stream-token",
+          stream: {
+            protocolVersion: "1",
+            subscriptions: ["ticks"],
+            currentTick: 12,
+            ticksPerPulse: 5,
+            status: "ready",
+          },
           contracts: {
             alerts: {
               schemaVersion: "1.0",
@@ -160,6 +169,15 @@ describe("kepler registration", () => {
         locationModuleId: "habitat_1_command_module_1",
       },
     ]);
+    expect(registration?.streamUrl).toBe("wss://planet.turingguild.com/habitats/stream");
+    expect(registration?.apiToken).toBe("habitat-stream-token");
+    expect(registration?.stream).toEqual({
+      protocolVersion: "1",
+      subscriptions: ["ticks"],
+      currentTick: 12,
+      ticksPerPulse: 5,
+      status: "ready",
+    });
     expect(registration?.alertContract).toEqual({
       schemaVersion: "1.0",
       schema: {

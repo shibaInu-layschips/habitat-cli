@@ -366,6 +366,34 @@ describe("power simulation", () => {
     expect((missingBatteryError as Error).message).toContain("No battery module was found");
   });
 
+  test("does not persist when cancellation arrives at the persistence boundary", async () => {
+    await hydrateModules("habitat-1", [commandModule, batteryModule]);
+    await writeSimulationState({ currentTick: 12 });
+
+    let abortedChecks = 0;
+    const signal = {
+      get aborted() {
+        abortedChecks += 1;
+        return abortedChecks > 1;
+      },
+    } as AbortSignal;
+
+    let abortError: unknown = null;
+    try {
+      await runPowerTicks(1, signal);
+    } catch (error) {
+      abortError = error;
+    }
+
+    expect(abortError).toBeInstanceOf(DOMException);
+    expect((abortError as DOMException).name).toBe("AbortError");
+    expect(await readSimulationState()).toEqual({ currentTick: 12 });
+    expect(await readModuleState()).toEqual({
+      habitatId: "habitat-1",
+      modules: [commandModule, batteryModule],
+    });
+  });
+
   test("completes construction jobs during ticks and creates the finished module", async () => {
     await hydrateModules("habitat-1", [commandModule, batteryModule]);
     await writeConstructionState({
@@ -430,5 +458,60 @@ describe("power simulation", () => {
     expect(construction.jobs[0]?.status).toBe("active");
     expect(construction.jobs[0]?.remainingBuildTicks).toBe(3);
     expect(summary.completedConstructionJobs).toEqual([]);
+  });
+
+  test("stops before construction completion when cancellation arrives during job advancement", async () => {
+    await hydrateModules("habitat-1", [commandModule, batteryModule]);
+    await writeConstructionState({
+      jobs: [
+        {
+          id: "job-1",
+          blueprintId: "small-solar-array",
+          outputModuleType: "small-solar-array",
+          outputDisplayName: "Small Solar Array",
+          facilityModuleSlug: "workshop-fabricator-1",
+          startedAtTick: 0,
+          remainingBuildTicks: 2,
+          spentResources: { ferrite: 90 },
+          runtimeAttributes: { status: "online", health: 100, powerGenerationKw: 12 },
+          capabilities: ["solar-generation"],
+          status: "active",
+        },
+      ],
+    });
+
+    let abortedChecks = 0;
+    const signal = {
+      get aborted() {
+        abortedChecks += 1;
+        return abortedChecks > 4;
+      },
+    } as AbortSignal;
+
+    let abortError: unknown = null;
+    try {
+      await runPowerTicks(1, signal);
+    } catch (error) {
+      abortError = error;
+    }
+
+    expect(abortError).toBeInstanceOf(DOMException);
+    expect((abortError as DOMException).name).toBe("AbortError");
+    expect(await readConstructionState()).toEqual({
+      jobs: [
+        expect.objectContaining({
+          id: "job-1",
+          remainingBuildTicks: 2,
+          status: "active",
+        }),
+      ],
+    });
+    expect(await listModules()).toEqual([
+      commandModule,
+      expect.objectContaining({
+        ...batteryModule,
+        runtimeAttributes: expect.objectContaining({ currentEnergyKwh: expect.closeTo(499.999444, 0.000001) }),
+      }),
+    ]);
   });
 });
